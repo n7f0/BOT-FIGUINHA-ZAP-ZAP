@@ -1,8 +1,10 @@
 /**
  * 🎴 Sticker Bot WhatsApp - com servidor HTTP para QR Code
  * 
- * - Envie qualquer imagem ou GIF → receba sticker com autor = seu nome no WhatsApp
- * - Acesse a URL gerada pela Railway para escanear o QR Code e autenticar
+ * - Envie qualquer imagem estática (JPG, PNG, WebP) → sticker estático
+ * - Envie GIF animado → sticker animado
+ * - Envie VÍDEO (MP4, MOV, AVI, etc.) → sticker animado (convertido para WebP)
+ * - O autor da figurinha é automaticamente seu nome no WhatsApp
  */
 
 const { Client, LocalAuth, MessageMedia } = require('whatsapp-web.js');
@@ -39,7 +41,7 @@ app.get('/', (req, res) => {
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`✅ Servidor HTTP rodando na porta ${PORT}`));
 
-// ========== ARGUMENTOS AVANÇADOS DO PUPPETEER (evita bloqueio) ==========
+// ========== ARGUMENTOS AVANÇADOS DO PUPPETEER ==========
 const puppeteerArgs = [
     '--no-sandbox',
     '--disable-setuid-sandbox',
@@ -59,12 +61,10 @@ const puppeteerArgs = [
     '--no-pings',
     '--password-store=basic',
     '--use-mock-keychain',
-    // 🔥 Evita detecção de automação
     '--disable-blink-features=AutomationControlled',
     '--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
 ];
 
-// ========== TENTA USAR CHROME DO SISTEMA (SE DISPONÍVEL) ==========
 let executablePath = undefined;
 if (process.platform === 'linux') {
     if (fs.existsSync('/usr/bin/google-chrome-stable')) {
@@ -73,12 +73,10 @@ if (process.platform === 'linux') {
     } else if (fs.existsSync('/usr/bin/chromium')) {
         executablePath = '/usr/bin/chromium';
         console.log('✅ Usando Chromium do sistema');
-    } else {
-        console.log('⚠️ Nenhum Chrome do sistema encontrado, usando o baixado pelo Puppeteer');
     }
 }
 
-// ========== INICIALIZAÇÃO DO CLIENTE WHATSAPP ==========
+// ========== CLIENTE WHATSAPP ==========
 const client = new Client({
     authStrategy: new LocalAuth(),
     puppeteer: {
@@ -92,16 +90,16 @@ const client = new Client({
 // ========== QR CODE ==========
 client.on('qr', qr => {
     ultimoQRCode = qr;
-    console.log('\n📱 QR Code gerado. Escaneie acessando a URL do seu serviço Railway.\n');
+    console.log('\n📱 QR Code gerado. Escaneie acessando a URL do serviço Railway.\n');
     qrcode.generate(qr, { small: true });
 });
 
 client.on('ready', () => {
     ultimoQRCode = null;
-    console.log('\n✅ Bot ONLINE! Envie qualquer imagem ou GIF.\n');
+    console.log('\n✅ Bot ONLINE! Envie qualquer imagem, GIF ou vídeo.\n');
 });
 
-// ========== FUNÇÃO PARA OBTER NOME DO CONTATO ==========
+// ========== OBTER NOME DO CONTATO ==========
 async function obterNomeContato(msg) {
     try {
         const contato = await msg.getContact();
@@ -122,12 +120,20 @@ async function converterImagemEstatica(bufferImagem) {
         .toBuffer();
 }
 
-// ========== CONVERTER GIF ==========
-async function converterGifParaWebp(bufferGif) {
-    const inputPath = path.join(PASTA_TEMP, `input_${Date.now()}.gif`);
+// ========== CONVERTER GIF OU VÍDEO PARA WEBP ANIMADO ==========
+async function converterVideoOuGifParaWebp(inputBuffer, entradaEhVideo) {
+    const inputExt = entradaEhVideo ? 'mp4' : 'gif';
+    const inputPath = path.join(PASTA_TEMP, `input_${Date.now()}.${inputExt}`);
     const outputPath = path.join(PASTA_TEMP, `output_${Date.now()}.webp`);
-    fs.writeFileSync(inputPath, bufferGif);
-    const ffmpegCmd = `ffmpeg -i "${inputPath}" -c:v libwebp -q:v 80 -vf "scale=${TAMANHO_STICKER}:${TAMANHO_STICKER}:force_original_aspect_ratio=1,pad=${TAMANHO_STICKER}:${TAMANHO_STICKER}:(ow-iw)/2:(oh-ih)/2:black" -loop 0 -vsync 0 "${outputPath}" -y`;
+    
+    fs.writeFileSync(inputPath, inputBuffer);
+    
+    // Filtro para redimensionar, manter proporção e centralizar
+    const scaleFilter = `scale=${TAMANHO_STICKER}:${TAMANHO_STICKER}:force_original_aspect_ratio=1,pad=${TAMANHO_STICKER}:${TAMANHO_STICKER}:(ow-iw)/2:(oh-ih)/2:black`;
+    
+    // Comando ffmpeg: entrada -> codec webp, loop infinito, qualidade 80
+    const ffmpegCmd = `ffmpeg -i "${inputPath}" -c:v libwebp -q:v 80 -vf "${scaleFilter}" -loop 0 -vsync 0 "${outputPath}" -y`;
+    
     try {
         await execPromise(ffmpegCmd);
         const outputBuffer = fs.readFileSync(outputPath);
@@ -137,25 +143,41 @@ async function converterGifParaWebp(bufferGif) {
     } catch (err) {
         if (fs.existsSync(inputPath)) fs.unlinkSync(inputPath);
         if (fs.existsSync(outputPath)) fs.unlinkSync(outputPath);
-        throw new Error(`Falha no ffmpeg: ${err.message}`);
+        throw new Error(`Falha na conversão: ${err.message}`);
     }
+}
+
+// ========== DETECTAR TIPO DE MÍDIA ==========
+function isVideo(mimeType) {
+    return mimeType.startsWith('video/');
+}
+
+function isGif(mimeType) {
+    return mimeType === 'image/gif';
 }
 
 // ========== TRATAMENTO DE MENSAGENS ==========
 client.on('message', async (msg) => {
-    // Ignora comandos antigos
     if (msg.body?.trim()?.startsWith('!')) return;
     if (!msg.hasMedia) return;
 
     try {
         const media = await msg.downloadMedia();
         if (!media || !media.data) throw new Error('Falha ao baixar');
+        
         const bufferOriginal = Buffer.from(media.data, 'base64');
-        const ehGif = media.mimetype === 'image/gif';
-
-        const webpBuffer = ehGif
-            ? await converterGifParaWebp(bufferOriginal)
-            : await converterImagemEstatica(bufferOriginal);
+        const mimeType = media.mimetype;
+        const ehVideo = isVideo(mimeType);
+        const ehGif = isGif(mimeType);
+        
+        let webpBuffer;
+        if (ehVideo || ehGif) {
+            console.log(`🎬 Convertendo ${ehVideo ? 'vídeo' : 'GIF'} para sticker animado...`);
+            webpBuffer = await converterVideoOuGifParaWebp(bufferOriginal, ehVideo);
+        } else {
+            console.log('🖼️ Convertendo imagem estática...');
+            webpBuffer = await converterImagemEstatica(bufferOriginal);
+        }
 
         const nomeAutor = await obterNomeContato(msg);
         const sticker = new MessageMedia('image/webp', webpBuffer.toString('base64'));
@@ -165,10 +187,10 @@ client.on('message', async (msg) => {
             stickerName: '',
             stickerAuthor: nomeAutor
         });
-        console.log(`✅ Sticker enviado | Autor: ${nomeAutor} | GIF: ${ehGif}`);
+        console.log(`✅ Sticker enviado | Autor: ${nomeAutor} | Tipo: ${ehVideo ? 'vídeo' : ehGif ? 'GIF' : 'imagem'}`);
     } catch (err) {
         console.error('Erro:', err.message);
-        await msg.reply('❌ Não foi possível converter. Tente outra imagem ou GIF.');
+        await msg.reply('❌ Não foi possível converter essa mídia. Tente outro arquivo (imagem, GIF ou vídeo curto).');
     }
 });
 
@@ -178,17 +200,13 @@ client.on('disconnected', (reason) => {
     setTimeout(() => client.initialize(), 10000);
 });
 
-// ========== TRATAMENTO DE ERRO DE BIBLIOTECAS ==========
 client.on('error', (err) => {
     if (err.message && err.message.includes('libglib')) {
-        console.error('❌ Faltam bibliotecas do sistema. Certifique-se de que o arquivo nixpacks.toml está no repositório.');
+        console.error('❌ Faltam bibliotecas do sistema. Verifique o arquivo nixpacks.toml.');
     } else {
         console.error('Erro no cliente:', err);
     }
 });
 
-// ========== INICIAR ==========
-console.log('🚀 Iniciando bot...');
-client.initialize().catch(err => {
-    console.error('Falha na inicialização:', err);
-});
+client.initialize();
+console.log('🚀 Iniciando bot conversor de imagens, GIFs e vídeos...');
