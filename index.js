@@ -20,6 +20,21 @@ const qrImage = require('qr-image');
 
 const execPromise = util.promisify(exec);
 
+// Verifica se ffmpeg está instalado, se não, tenta instalar (para Railway)
+const { execSync } = require('child_process');
+try {
+    execSync('ffmpeg -version', { stdio: 'ignore' });
+    console.log('✅ ffmpeg encontrado');
+} catch {
+    console.log('⚠️ ffmpeg não encontrado, tentando instalar...');
+    try {
+        execSync('apt-get update && apt-get install -y ffmpeg', { stdio: 'inherit' });
+        console.log('✅ ffmpeg instalado com sucesso');
+    } catch (err) {
+        console.error('❌ Falha ao instalar ffmpeg:', err.message);
+    }
+}
+
 // ========== CONFIGURAÇÕES ==========
 const TAMANHO_STICKER = 512;
 const PASTA_TEMP = path.join(__dirname, 'temp');
