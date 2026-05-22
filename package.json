@@ -1,6 +1,6 @@
 {
   "name": "sticker-bot-whatsapp",
-  "version": "4.0.0",
+  "version": "5.0.0",
   "description": "Bot WhatsApp que converte imagens e GIFs em figurinhas com autor automático e servidor HTTP para QR Code",
   "main": "index.js",
   "scripts": {
