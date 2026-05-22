@@ -1,5 +1,5 @@
 {
-  "name": "sticker-bot-simples",
+  "name": "sticker-bot-whatsapp",
   "version": "4.0.0",
   "description": "Bot WhatsApp que converte imagens e GIFs em figurinhas com autor automático e servidor HTTP para QR Code",
   "main": "index.js",
@@ -7,11 +7,14 @@
     "start": "node index.js"
   },
   "dependencies": {
-    "whatsapp-web.js": "^1.23.0",
+    "fluent-ffmpeg": "^2.1.2",
     "qrcode-terminal": "^0.12.0",
     "sharp": "^0.33.0",
-    "fluent-ffmpeg": "^2.1.2",
+    "whatsapp-web.js": "^1.23.0",
     "express": "^4.18.2",
     "qr-image": "^3.2.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
   }
 }
