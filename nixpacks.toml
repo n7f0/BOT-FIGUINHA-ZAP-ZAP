@@ -1,0 +1,36 @@
+[nixpacks]
+# Essa seção define as variáveis de ambiente durante a compilação.
+# 'NIXPACKS_METADATA' é um requisito para que as variáveis de ambiente do Railway
+# sejam carregadas corretamente durante o processo de build.
+plan = '''
+  [environment]
+  NIXPACKS_METADATA = "railway"
+
+  [phases.setup]
+  nixPkgs = ["..."]
+  # No setup, vamos instalar as principais bibliotecas que o Puppeteer precisa.
+  # A lista abaixo cobre os requisitos comuns do Chromium em ambientes headless.
+  nixPkgs = [
+    "gcc",
+    "libdrm",
+    "libxkbcommon",
+    "libglvnd",
+    "libglvnd",
+    "libxshmfence",
+    "dbus",
+    "libxshmfence",
+    "libxshmfence",
+    "cups",
+    "cups",
+    "libxkbcommon",
+    "libxrandr",
+    "libxcomposite",
+    "libxdamage",
+    "libxrender",
+    "libxfixes",
+    "libxext",
+    "at-spi2-atk",
+    "at-spi2-core",
+    "gtk3"
+  ]
+'''
