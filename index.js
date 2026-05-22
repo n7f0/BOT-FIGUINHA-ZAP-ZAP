@@ -39,7 +39,7 @@ app.get('/', (req, res) => {
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`✅ Servidor HTTP rodando na porta ${PORT}`));
 
-// ========== CONFIGURAÇÃO DO PUPPETEER (MAIS ROBUSTA) ==========
+// ========== ARGUMENTOS AVANÇADOS DO PUPPETEER (evita bloqueio) ==========
 const puppeteerArgs = [
     '--no-sandbox',
     '--disable-setuid-sandbox',
@@ -58,19 +58,24 @@ const puppeteerArgs = [
     '--no-default-browser-check',
     '--no-pings',
     '--password-store=basic',
-    '--use-mock-keychain'
+    '--use-mock-keychain',
+    // 🔥 Evita detecção de automação
+    '--disable-blink-features=AutomationControlled',
+    '--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
 ];
 
-// Tenta usar Chromium do sistema se disponível (para Railway com nixpacks)
+// ========== TENTA USAR CHROME DO SISTEMA (SE DISPONÍVEL) ==========
 let executablePath = undefined;
-if (process.platform === 'linux' && fs.existsSync('/usr/bin/google-chrome-stable')) {
-    executablePath = '/usr/bin/google-chrome-stable';
-    console.log('✅ Usando Chrome do sistema');
-} else if (process.platform === 'linux' && fs.existsSync('/usr/bin/chromium')) {
-    executablePath = '/usr/bin/chromium';
-    console.log('✅ Usando Chromium do sistema');
-} else {
-    console.log('⚠️ Usando Chromium baixado pelo Puppeteer');
+if (process.platform === 'linux') {
+    if (fs.existsSync('/usr/bin/google-chrome-stable')) {
+        executablePath = '/usr/bin/google-chrome-stable';
+        console.log('✅ Usando Google Chrome do sistema');
+    } else if (fs.existsSync('/usr/bin/chromium')) {
+        executablePath = '/usr/bin/chromium';
+        console.log('✅ Usando Chromium do sistema');
+    } else {
+        console.log('⚠️ Nenhum Chrome do sistema encontrado, usando o baixado pelo Puppeteer');
+    }
 }
 
 // ========== INICIALIZAÇÃO DO CLIENTE WHATSAPP ==========
@@ -79,7 +84,8 @@ const client = new Client({
     puppeteer: {
         headless: true,
         args: puppeteerArgs,
-        executablePath: executablePath
+        executablePath: executablePath,
+        defaultViewport: { width: 1280, height: 720 }
     }
 });
 
@@ -137,6 +143,7 @@ async function converterGifParaWebp(bufferGif) {
 
 // ========== TRATAMENTO DE MENSAGENS ==========
 client.on('message', async (msg) => {
+    // Ignora comandos antigos
     if (msg.body?.trim()?.startsWith('!')) return;
     if (!msg.hasMedia) return;
 
@@ -174,13 +181,14 @@ client.on('disconnected', (reason) => {
 // ========== TRATAMENTO DE ERRO DE BIBLIOTECAS ==========
 client.on('error', (err) => {
     if (err.message && err.message.includes('libglib')) {
-        console.error('❌ Faltam bibliotecas do sistema no Railway.');
-        console.error('   Solução: crie um arquivo "nixpacks.toml" no repositório com as dependências necessárias.');
-        console.error('   Consulte: https://docs.railway.app/guides/nixpacks');
+        console.error('❌ Faltam bibliotecas do sistema. Certifique-se de que o arquivo nixpacks.toml está no repositório.');
     } else {
         console.error('Erro no cliente:', err);
     }
 });
 
 // ========== INICIAR ==========
-client.initialize();
+console.log('🚀 Iniciando bot...');
+client.initialize().catch(err => {
+    console.error('Falha na inicialização:', err);
+});
