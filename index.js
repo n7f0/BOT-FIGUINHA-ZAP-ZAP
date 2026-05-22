@@ -39,23 +39,53 @@ app.get('/', (req, res) => {
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`✅ Servidor HTTP rodando na porta ${PORT}`));
 
+// ========== CONFIGURAÇÃO DO PUPPETEER (MAIS ROBUSTA) ==========
+const puppeteerArgs = [
+    '--no-sandbox',
+    '--disable-setuid-sandbox',
+    '--disable-dev-shm-usage',
+    '--disable-gpu',
+    '--disable-accelerated-2d-canvas',
+    '--no-first-run',
+    '--no-zygote',
+    '--disable-default-apps',
+    '--disable-extensions',
+    '--disable-sync',
+    '--disable-translate',
+    '--hide-scrollbars',
+    '--metrics-recording-only',
+    '--mute-audio',
+    '--no-default-browser-check',
+    '--no-pings',
+    '--password-store=basic',
+    '--use-mock-keychain'
+];
+
+// Tenta usar Chromium do sistema se disponível (para Railway com nixpacks)
+let executablePath = undefined;
+if (process.platform === 'linux' && fs.existsSync('/usr/bin/google-chrome-stable')) {
+    executablePath = '/usr/bin/google-chrome-stable';
+    console.log('✅ Usando Chrome do sistema');
+} else if (process.platform === 'linux' && fs.existsSync('/usr/bin/chromium')) {
+    executablePath = '/usr/bin/chromium';
+    console.log('✅ Usando Chromium do sistema');
+} else {
+    console.log('⚠️ Usando Chromium baixado pelo Puppeteer');
+}
+
 // ========== INICIALIZAÇÃO DO CLIENTE WHATSAPP ==========
 const client = new Client({
     authStrategy: new LocalAuth(),
     puppeteer: {
         headless: true,
-        args: [
-            '--no-sandbox',
-            '--disable-setuid-sandbox',
-            '--disable-dev-shm-usage'
-        ]
+        args: puppeteerArgs,
+        executablePath: executablePath
     }
 });
 
 // ========== QR CODE ==========
 client.on('qr', qr => {
     ultimoQRCode = qr;
-    // Também exibe no terminal (útil para logs)
     console.log('\n📱 QR Code gerado. Escaneie acessando a URL do seu serviço Railway.\n');
     qrcode.generate(qr, { small: true });
 });
@@ -135,9 +165,22 @@ client.on('message', async (msg) => {
     }
 });
 
+// ========== RECONEXÃO AUTOMÁTICA ==========
 client.on('disconnected', (reason) => {
     console.log('🔌 Desconectado:', reason);
     setTimeout(() => client.initialize(), 10000);
 });
 
+// ========== TRATAMENTO DE ERRO DE BIBLIOTECAS ==========
+client.on('error', (err) => {
+    if (err.message && err.message.includes('libglib')) {
+        console.error('❌ Faltam bibliotecas do sistema no Railway.');
+        console.error('   Solução: crie um arquivo "nixpacks.toml" no repositório com as dependências necessárias.');
+        console.error('   Consulte: https://docs.railway.app/guides/nixpacks');
+    } else {
+        console.error('Erro no cliente:', err);
+    }
+});
+
+// ========== INICIAR ==========
 client.initialize();
