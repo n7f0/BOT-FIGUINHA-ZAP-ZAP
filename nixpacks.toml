@@ -21,6 +21,41 @@ plan = '''
     "at-spi2-atk",
     "at-spi2-core",
     "gtk3",
-    "libglib-2.0"
+    "glib",
+    "libdrm",
+    "libxkbcommon",
+    "libx11",
+    "libxcb",
+    "libxcomposite",
+    "libxcursor",
+    "libxdamage",
+    "libxext",
+    "libxfixes",
+    "libxi",
+    "libxrandr",
+    "libxrender",
+    "libxshmfence",
+    "libxss",
+    "libxtst",
+    "libxkbcommon",
+    "libasound",
+    "libgbm",
+    "libatk-bridge2.0",
+    "libxkbcommon-x11",
+    "cairo",
+    "pango",
+    "harfbuzz",
+    "fontconfig",
+    "freetype",
+    "nspr",
+    "nss",
+    "expat"
   ]
+
+  # Adiciona também o Chrome estável do sistema
+  [phases.install]
+  nixPkgs = ["google-chrome"]
+
+  [start.cmd]
+  cmd = "node index.js"
 '''
