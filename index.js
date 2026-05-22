@@ -20,21 +20,6 @@ const qrImage = require('qr-image');
 
 const execPromise = util.promisify(exec);
 
-// Verifica se ffmpeg está instalado, se não, tenta instalar (para Railway)
-const { execSync } = require('child_process');
-try {
-    execSync('ffmpeg -version', { stdio: 'ignore' });
-    console.log('✅ ffmpeg encontrado');
-} catch {
-    console.log('⚠️ ffmpeg não encontrado, tentando instalar...');
-    try {
-        execSync('apt-get update && apt-get install -y ffmpeg', { stdio: 'inherit' });
-        console.log('✅ ffmpeg instalado com sucesso');
-    } catch (err) {
-        console.error('❌ Falha ao instalar ffmpeg:', err.message);
-    }
-}
-
 // ========== CONFIGURAÇÕES ==========
 const TAMANHO_STICKER = 512;
 const PASTA_TEMP = path.join(__dirname, 'temp');
@@ -55,7 +40,7 @@ app.get('/', (req, res) => {
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`✅ Servidor HTTP rodando na porta ${PORT}`));
 
-// ========== PUPPETEER ARGS (evita bloqueio) ==========
+// ========== PUPPETEER ARGS (evita bloqueio e lock de perfil) ==========
 const puppeteerArgs = [
     '--no-sandbox',
     '--disable-setuid-sandbox',
@@ -75,18 +60,32 @@ const puppeteerArgs = [
     '--no-pings',
     '--password-store=basic',
     '--use-mock-keychain',
-    '--disable-blink-features=AutomationControlled'
+    '--disable-blink-features=AutomationControlled',
+    // 🔥 Evita problemas de lock de perfil
+    '--user-data-dir=/tmp/chrome-profile',
+    '--disable-session-crashed-bubble',
+    '--disable-features=LockProfileCookieDatabase'
 ];
 
 let executablePath = undefined;
 if (process.platform === 'linux') {
     if (fs.existsSync('/usr/bin/google-chrome-stable')) {
         executablePath = '/usr/bin/google-chrome-stable';
-        console.log('✅ Usando Chrome do sistema');
+        console.log('✅ Usando Google Chrome do sistema');
     } else if (fs.existsSync('/usr/bin/chromium')) {
         executablePath = '/usr/bin/chromium';
         console.log('✅ Usando Chromium do sistema');
+    } else {
+        console.log('⚠️ Nenhum navegador encontrado no sistema, Puppeteer usará o baixado');
     }
+}
+
+// Verifica se ffmpeg está disponível
+try {
+    execSync('ffmpeg -version', { stdio: 'ignore' });
+    console.log('✅ ffmpeg encontrado');
+} catch {
+    console.warn('⚠️ ffmpeg não encontrado. Vídeos e GIFs podem falhar.');
 }
 
 // ========== CLIENTE WHATSAPP ==========
@@ -137,13 +136,9 @@ async function converterMidiaAnimada(inputBuffer, isVideo) {
     const outputPath = path.join(PASTA_TEMP, `output_${Date.now()}.webp`);
     fs.writeFileSync(inputPath, inputBuffer);
 
-    // Filtro: redimensiona para 512x512 mantendo proporção, centraliza, preenche com preto
     const scaleFilter = `scale=${TAMANHO_STICKER}:${TAMANHO_STICKER}:force_original_aspect_ratio=1,pad=${TAMANHO_STICKER}:${TAMANHO_STICKER}:(ow-iw)/2:(oh-ih)/2:black`;
-    
-    // Comando base
     let cmd = `ffmpeg -i "${inputPath}" -c:v libwebp -q:v 80 -vf "${scaleFilter}" -loop 0 -vsync 0 "${outputPath}" -y`;
     
-    // Para vídeos, limitar duração a 15 segundos e garantir boa taxa de quadros
     if (isVideo) {
         cmd = `ffmpeg -i "${inputPath}" -t 15 -r 15 -c:v libwebp -q:v 80 -vf "${scaleFilter}" -loop 0 -vsync 0 "${outputPath}" -y`;
     }
@@ -219,5 +214,6 @@ client.on('error', (err) => {
     console.error('Erro no cliente:', err);
 });
 
+// ========== INICIAR ==========
 client.initialize();
 console.log('🚀 Iniciando bot conversor de figurinhas (imagens, GIFs e vídeos)...');
