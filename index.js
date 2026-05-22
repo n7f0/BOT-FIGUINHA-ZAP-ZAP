@@ -41,18 +41,10 @@ app.get('/', (req, res) => {
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`✅ Servidor HTTP rodando na porta ${PORT}`));
 
-// ========== LIMPEZA DO PERFIL DO CHROMIUM (resolve lock) ==========
-const chromeProfileDir = '/tmp/chrome-profile';
-if (fs.existsSync(chromeProfileDir)) {
-    console.log('🗑️ Removendo perfil antigo do Chromium para evitar lock...');
-    try {
-        fs.rmSync(chromeProfileDir, { recursive: true, force: true });
-        console.log('✅ Perfil removido com sucesso.');
-    } catch (err) {
-        console.warn('⚠️ Não foi possível remover o perfil:', err.message);
-    }
-}
-fs.mkdirSync(chromeProfileDir, { recursive: true });
+// ========== CRIA UM DIRETÓRIO DE PERFIL ÚNICO PARA ESTA EXECUÇÃO ==========
+const uniqueProfileDir = path.join('/tmp', `chrome-profile-${Date.now()}`);
+console.log(`📁 Criando perfil Chromium em: ${uniqueProfileDir}`);
+fs.mkdirSync(uniqueProfileDir, { recursive: true });
 
 // ========== ARGUMENTOS DO PUPPETEER ==========
 const puppeteerArgs = [
@@ -75,10 +67,18 @@ const puppeteerArgs = [
     '--password-store=basic',
     '--use-mock-keychain',
     '--disable-blink-features=AutomationControlled',
-    `--user-data-dir=${chromeProfileDir}`,
+    `--user-data-dir=${uniqueProfileDir}`,
     '--profile-directory=Default',
     '--disable-session-crashed-bubble',
-    '--disable-features=LockProfileCookieDatabase'
+    '--disable-features=LockProfileCookieDatabase',
+    '--disable-background-networking',
+    '--disable-client-side-phishing-detection',
+    '--disable-component-update',
+    '--disable-domain-reliability',
+    '--disable-sync',
+    '--disable-default-apps',
+    '--disable-web-security',
+    '--disable-features=ChromeWhatsNewUI'
 ];
 
 let executablePath = undefined;
