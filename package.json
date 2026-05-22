@@ -1,0 +1,15 @@
+{
+  "name": "sticker-bot-simples",
+  "version": "3.0.0",
+  "description": "Bot WhatsApp que converte imagens e GIFs em figurinhas com autor automático",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "whatsapp-web.js": "^1.23.0",
+    "qrcode-terminal": "^0.12.0",
+    "sharp": "^0.33.0",
+    "fluent-ffmpeg": "^2.1.2"
+  }
+}
