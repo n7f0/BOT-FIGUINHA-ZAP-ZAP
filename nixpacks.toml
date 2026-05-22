@@ -22,6 +22,6 @@ plan = '''
     "at-spi2-core",
     "gtk3",
     "glib",
-    "ffmpeg"
+    "ffmpeg-full"
   ]
 '''
