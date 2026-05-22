@@ -1,6 +1,6 @@
 /**
  * 🎴 Sticker Bot WhatsApp - Converte imagens, GIFs e VÍDEOS em figurinhas
- * 
+ *
  * - Envie qualquer imagem (JPG, PNG) → sticker estático
  * - Envie GIF animado → sticker animado
  * - Envie VÍDEO (MP4, MOV, etc.) → sticker animado (WebP)
@@ -40,7 +40,7 @@ app.get('/', (req, res) => {
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`✅ Servidor HTTP rodando na porta ${PORT}`));
 
-// ========== PUPPETEER ARGS (evita bloqueio e lock de perfil) ==========
+// ========== PUPPETEER ARGS (evita bloqueio) ==========
 const puppeteerArgs = [
     '--no-sandbox',
     '--disable-setuid-sandbox',
@@ -61,7 +61,8 @@ const puppeteerArgs = [
     '--password-store=basic',
     '--use-mock-keychain',
     '--disable-blink-features=AutomationControlled',
-    // 🔥 Evita problemas de lock de perfil
+    // 🔥 Solução do problema de "Profile Locked":
+    // Define um diretório temporário para o perfil do Chromium.
     '--user-data-dir=/tmp/chrome-profile',
     '--disable-session-crashed-bubble',
     '--disable-features=LockProfileCookieDatabase'
@@ -69,23 +70,13 @@ const puppeteerArgs = [
 
 let executablePath = undefined;
 if (process.platform === 'linux') {
-    if (fs.existsSync('/usr/bin/google-chrome-stable')) {
-        executablePath = '/usr/bin/google-chrome-stable';
-        console.log('✅ Usando Google Chrome do sistema');
-    } else if (fs.existsSync('/usr/bin/chromium')) {
+    // Tenta usar o Chromium instalado pelo Dockerfile
+    if (fs.existsSync('/usr/bin/chromium')) {
         executablePath = '/usr/bin/chromium';
         console.log('✅ Usando Chromium do sistema');
     } else {
         console.log('⚠️ Nenhum navegador encontrado no sistema, Puppeteer usará o baixado');
     }
-}
-
-// Verifica se ffmpeg está disponível
-try {
-    execSync('ffmpeg -version', { stdio: 'ignore' });
-    console.log('✅ ffmpeg encontrado');
-} catch {
-    console.warn('⚠️ ffmpeg não encontrado. Vídeos e GIFs podem falhar.');
 }
 
 // ========== CLIENTE WHATSAPP ==========
