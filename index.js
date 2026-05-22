@@ -41,10 +41,10 @@ app.get('/', (req, res) => {
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`✅ Servidor HTTP rodando na porta ${PORT}`));
 
-// ========== CRIA UM DIRETÓRIO DE PERFIL ÚNICO PARA ESTA EXECUÇÃO ==========
-const uniqueProfileDir = path.join('/tmp', `chrome-profile-${Date.now()}`);
-console.log(`📁 Criando perfil Chromium em: ${uniqueProfileDir}`);
-fs.mkdirSync(uniqueProfileDir, { recursive: true });
+// ========== CRIA UM DIRETÓRIO DE PERFIL EFÊMERO (evita lock) ==========
+const profileDir = `/tmp/chrome-profile-${Date.now()}`;
+fs.mkdirSync(profileDir, { recursive: true });
+console.log(`📁 Perfil Chromium efêmero: ${profileDir}`);
 
 // ========== ARGUMENTOS DO PUPPETEER ==========
 const puppeteerArgs = [
@@ -67,20 +67,12 @@ const puppeteerArgs = [
     '--password-store=basic',
     '--use-mock-keychain',
     '--disable-blink-features=AutomationControlled',
-    `--user-data-dir=${uniqueProfileDir}`,
-    '--profile-directory=Default',
+    `--user-data-dir=${profileDir}`,       // Perfil exclusivo, novo a cada start
     '--disable-session-crashed-bubble',
-    '--disable-features=LockProfileCookieDatabase',
-    '--disable-background-networking',
-    '--disable-client-side-phishing-detection',
-    '--disable-component-update',
-    '--disable-domain-reliability',
-    '--disable-sync',
-    '--disable-default-apps',
-    '--disable-web-security',
-    '--disable-features=ChromeWhatsNewUI'
+    '--disable-features=LockProfileCookieDatabase'
 ];
 
+// Define caminho do Chromium (sistema ou baixado)
 let executablePath = undefined;
 if (process.platform === 'linux') {
     if (fs.existsSync('/usr/bin/chromium')) {
@@ -101,7 +93,7 @@ try {
 
 // ========== CLIENTE WHATSAPP ==========
 const client = new Client({
-    authStrategy: new LocalAuth(),
+    authStrategy: new LocalAuth(),          // Sessão persistente em .wwebjs_auth (volume Railway)
     puppeteer: {
         headless: true,
         args: puppeteerArgs,
@@ -203,12 +195,18 @@ client.on('message', async (msg) => {
     }
 });
 
+// ========== RECONEXÃO ==========
 client.on('disconnected', (reason) => {
     console.log('🔌 Desconectado:', reason);
     setTimeout(() => client.initialize(), 10000);
 });
 
 client.on('error', (err) => console.error('Erro no cliente:', err));
+
+// ========== LIMPEZA DO PERFIL EFÊMERO AO ENCERRAR ==========
+process.on('exit', () => {
+    try { fs.rmSync(profileDir, { recursive: true, force: true }); } catch (e) {}
+});
 
 client.initialize();
 console.log('🚀 Iniciando bot conversor de figurinhas...');
