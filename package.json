@@ -1,6 +1,11 @@
 {
-  "name": "sticker-bot-group-to-channel",
+  "name": "sticker-bot-auto",
   "version": "1.0.0",
+  "description": "Bot que converte imagens/vídeos em figurinhas no grupo e canal",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
   "dependencies": {
     "express": "^4.18.2",
     "qr-image": "^3.2.0",
