@@ -15,10 +15,11 @@ const TAMANHO_STICKER = 512;
 const PASTA_TEMP = path.join(__dirname, 'temp');
 if (!fs.existsSync(PASTA_TEMP)) fs.mkdirSync(PASTA_TEMP);
 
-// ⚠️ Configure abaixo o ID do seu canal (será preenchido automaticamente ou manualmente)
-let CHANNEL_ID = null;
+// ⚠️ SUBSTITUA PELOS IDs REAIS (obtenha com !listar_grupos e !listar_canais)
+const GRUPO_ID = '000000000000000000@g.us';   // ID do grupo onde você enviará as imagens
+const CANAL_ID = '000000000000000000@newsletter'; // ID do canal onde as figurinhas serão publicadas
 
-// ========== SERVIDOR HTTP PARA QR CODE (opcional, mas útil) ==========
+// ========== SERVIDOR HTTP (QR CODE) ==========
 let ultimoQRCode = null;
 const app = express();
 app.get('/', (req, res) => {
@@ -33,7 +34,7 @@ app.get('/', (req, res) => {
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`✅ Servidor HTTP na porta ${PORT}`));
 
-// ========== PERFIL EFÊMERO DO CHROMIUM (RESOLVE O LOCK) ==========
+// ========== PERFIL EFÊMERO DO CHROMIUM (EVITA LOCK) ==========
 const profileDir = `/tmp/chrome-profile-${Date.now()}`;
 fs.mkdirSync(profileDir, { recursive: true });
 console.log(`📁 Perfil Chromium: ${profileDir}`);
@@ -67,58 +68,53 @@ const client = new Client({
 // ========== QR CODE ==========
 client.on('qr', qr => {
     ultimoQRCode = qr;
-    console.log('📱 QR Code gerado. Escaneie pela URL pública ou no terminal.');
+    console.log('📱 QR Code gerado. Escaneie pela URL pública.');
     qrcode.generate(qr, { small: true });
 });
 
 // ========== BOT PRONTO ==========
 client.on('ready', async () => {
-    console.log('✅ Bot ONLINE! Aguardando mídias para enviar ao canal...');
+    console.log('✅ Bot ONLINE!');
+    console.log(`👥 Grupo monitorado: ${GRUPO_ID}`);
+    console.log(`📢 Canal de destino: ${CANAL_ID}`);
+    console.log('⚠️ Verifique se o bot é ADMIN no grupo (para apagar mensagens) e no canal (para publicar).');
+});
 
-    // Tenta obter o ID do canal automaticamente (caso o bot já participe do canal)
-    const chats = await client.getChats();
-    for (const chat of chats) {
-        if (chat.isChannel && chat.name && chat.name.toLowerCase().includes('figurinha')) {
-            CHANNEL_ID = chat.id._serialized;
-            console.log(`📢 Canal encontrado automaticamente: ${chat.name} -> ID: ${CHANNEL_ID}`);
-            break;
+// ========== COMANDOS PARA OBTER IDs (use uma única vez, depois comente) ==========
+client.on('message', async (msg) => {
+    if (msg.body === '!listar_grupos') {
+        const chats = await client.getChats();
+        let resposta = "👥 Grupos que o bot participa:\n";
+        for (const chat of chats) {
+            if (chat.isGroup) resposta += `- ${chat.name} | ID: ${chat.id._serialized}\n`;
         }
+        await msg.reply(resposta);
     }
-    if (!CHANNEL_ID) {
-        console.log('⚠️ Canal não identificado automaticamente. Use o comando !listar_canais para obter o ID.');
+    else if (msg.body === '!listar_canais') {
+        const chats = await client.getChats();
+        let resposta = "📢 Canais que o bot participa:\n";
+        for (const chat of chats) {
+            if (chat.isChannel) resposta += `- ${chat.name} | ID: ${chat.id._serialized}\n`;
+        }
+        await msg.reply(resposta);
     }
 });
 
-// ========== COMANDO PARA LISTAR CANAIS (USE UMA ÚNICA VEZ) ==========
+// ========== PROCESSAMENTO PRINCIPAL ==========
 client.on('message', async (msg) => {
-    if (msg.body === '!listar_canais') {
-        const chats = await client.getChats();
-        let resposta = "📢 Canais disponíveis:\n";
-        for (const chat of chats) {
-            if (chat.isChannel) {
-                resposta += `- Nome: ${chat.name} | ID: ${chat.id._serialized}\n`;
-            }
-        }
-        await msg.reply(resposta || "Nenhum canal encontrado.");
-        return;
-    }
-
-    // Ignora comandos e mensagens sem mídia
-    if (msg.body?.startsWith('!')) return;
+    // Só processa mensagens com mídia, no grupo específico
     if (!msg.hasMedia) return;
-
-    if (!CHANNEL_ID) {
-        await msg.reply('⚠️ Canal não configurado. Use o comando !listar_canais e depois atualize o código com o ID correto.');
-        return;
-    }
+    if (msg.from !== GRUPO_ID) return; // ignora outros chats
 
     try {
+        // 1. Baixar a mídia
         const media = await msg.downloadMedia();
         if (!media?.data) throw new Error('Falha ao baixar mídia');
         const buffer = Buffer.from(media.data, 'base64');
         const mimeType = media.mimetype;
-        console.log(`📁 Recebido: ${mimeType} (${buffer.length} bytes)`);
+        console.log(`📁 Mídia recebida no grupo: ${mimeType} (${buffer.length} bytes)`);
 
+        // 2. Converter para sticker
         let webpBuffer;
         if (mimeType.startsWith('video/')) {
             console.log('🎬 Convertendo vídeo para sticker animado...');
@@ -139,20 +135,29 @@ client.on('message', async (msg) => {
                 .toBuffer();
         }
 
-        const nomeAutor = (await msg.getContact()).pushname || 'Usuário';
-        const sticker = new MessageMedia('image/webp', webpBuffer.toString('base64'));
-        console.log(`📦 Sticker gerado: ${(webpBuffer.length / 1024).toFixed(2)} KB`);
+        // 3. Obter nome do remetente
+        const contato = await msg.getContact();
+        const nomeAutor = contato.pushname || contato.name || 'Usuário';
 
-        await client.sendMessage(CHANNEL_ID, sticker, {
+        // 4. Enviar sticker para o canal
+        const sticker = new MessageMedia('image/webp', webpBuffer.toString('base64'));
+        await client.sendMessage(CANAL_ID, sticker, {
             sendMediaAsSticker: true,
             stickerName: '🎴',
             stickerAuthor: nomeAutor
         });
-        await msg.reply(`✅ Sua figurinha foi publicada no canal!\nAutor: ${nomeAutor}`);
-        console.log(`✅ Publicado no canal por ${nomeAutor}`);
+        console.log(`✅ Figurinha de ${nomeAutor} enviada para o canal.`);
+
+        // 5. Apagar a mensagem original do grupo (imagem ou vídeo)
+        await msg.delete(true); // true = apagar para todos
+        console.log(`🗑️ Mensagem original apagada do grupo (remetente: ${nomeAutor})`);
+
+        // (Opcional) Enviar uma confirmação rápida que desaparece
+        // const confirm = await client.sendMessage(GRUPO_ID, `✅ Figurinha de ${nomeAutor} publicada.`);
+        // setTimeout(() => confirm.delete(true), 4000);
     } catch (err) {
-        console.error('❌ Erro:', err.message);
-        await msg.reply('❌ Falha ao converter. Tente outro arquivo (imagem ou vídeo curto).');
+        console.error('❌ Erro ao processar mídia:', err.message);
+        // Em caso de erro, NÃO apaga a mensagem original para não perder o arquivo
     }
 });
 
