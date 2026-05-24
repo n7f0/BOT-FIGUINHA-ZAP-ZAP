@@ -1,14 +1,8 @@
 {
-  "name": "sticker-bot-to-channel",
+  "name": "sticker-bot",
   "version": "1.0.0",
-  "description": "Bot que converte imagens/vídeos em figurinhas e envia para um canal do WhatsApp",
-  "main": "index.js",
-  "scripts": {
-    "start": "node index.js"
-  },
   "dependencies": {
     "express": "^4.18.2",
-    "fluent-ffmpeg": "^2.1.2",
     "qr-image": "^3.2.0",
     "qrcode-terminal": "^0.12.0",
     "sharp": "^0.33.0",
