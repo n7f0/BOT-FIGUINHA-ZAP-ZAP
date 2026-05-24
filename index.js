@@ -16,7 +16,7 @@ const PASTA_TEMP = path.join(__dirname, 'temp');
 if (!fs.existsSync(PASTA_TEMP)) fs.mkdirSync(PASTA_TEMP);
 
 // ⚠️ VOCÊ DEVE PREENCHER ESTES IDs (obtenha pelos logs do bot na primeira execução)
-const GRUPO_ID = '000000000000000000@g.us';    // ID do grupo onde as imagens serão enviadas
+const GRUPO_ID = '120363428035302666@g.us';    // ID do grupo onde as imagens serão enviadas
 const CANAL_ID = '000000000000000000@newsletter'; // ID do canal público
 
 // ========== SERVIDOR HTTP PARA QR CODE (OBRIGATÓRIO NA RAILWAY) ==========
