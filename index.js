@@ -10,31 +10,35 @@ const qrImage = require('qr-image');
 
 const execPromise = util.promisify(exec);
 
-// ========== CONFIGURAÇÕES (SUBSTITUA PELOS IDs REAIS) ==========
+// ========== CONFIGURAÇÕES ==========
 const TAMANHO_STICKER = 512;
 const PASTA_TEMP = path.join(__dirname, 'temp');
 if (!fs.existsSync(PASTA_TEMP)) fs.mkdirSync(PASTA_TEMP);
 
-// ⚠️ VOCÊ DEVE PREENCHER ESTES IDs (obtenha pelos logs do bot na primeira execução)
-const GRUPO_ID = '120363428035302666@g.us';    // ID do grupo onde as imagens serão enviadas
-const CANAL_ID = '000000000000000000@newsletter'; // ID do canal público
-
 // ========== SERVIDOR HTTP PARA QR CODE (OBRIGATÓRIO NA RAILWAY) ==========
 let ultimoQRCode = null;
 const app = express();
+
 app.get('/', (req, res) => {
     if (ultimoQRCode) {
         const qr_svg = qrImage.imageSync(ultimoQRCode, { type: 'svg' });
         res.setHeader('Content-Type', 'image/svg+xml');
         res.send(qr_svg);
     } else {
-        res.send('📱 QR Code ainda não gerado. Aguarde...');
+        res.send(`
+            <html><body style="font-family:sans-serif;text-align:center;padding:40px">
+                <h2>🎴 FigurinhaBot</h2>
+                <p>Bot já está conectado! Nenhum QR Code pendente.</p>
+                <p>Se precisar reconectar, apague a pasta <code>.wwebjs_auth</code> e reinicie.</p>
+            </body></html>
+        `);
     }
 });
+
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`✅ Servidor HTTP na porta ${PORT}`));
 
-// ========== PERFIL EFÊMERO DO CHROMIUM (EVITA "PROFILE LOCK") ==========
+// ========== PERFIL EFÊMERO DO CHROMIUM ==========
 const profileDir = `/tmp/chrome-profile-${Date.now()}`;
 fs.mkdirSync(profileDir, { recursive: true });
 console.log(`📁 Perfil Chromium: ${profileDir}`);
@@ -55,133 +59,204 @@ const puppeteerArgs = [
 ];
 
 let executablePath = undefined;
-if (process.platform === 'linux' && fs.existsSync('/usr/bin/chromium')) {
-    executablePath = '/usr/bin/chromium';
-    console.log('✅ Usando Chromium do sistema');
+const chromiumPaths = [
+    '/usr/bin/chromium',
+    '/usr/bin/chromium-browser',
+    '/usr/bin/google-chrome',
+    process.env.PUPPETEER_EXECUTABLE_PATH
+].filter(Boolean);
+
+for (const p of chromiumPaths) {
+    if (fs.existsSync(p)) {
+        executablePath = p;
+        console.log(`✅ Usando Chromium: ${p}`);
+        break;
+    }
 }
 
 const client = new Client({
     authStrategy: new LocalAuth(),
-    puppeteer: { headless: true, args: puppeteerArgs, executablePath, defaultViewport: { width: 1280, height: 720 } }
+    puppeteer: {
+        headless: true,
+        args: puppeteerArgs,
+        executablePath,
+        defaultViewport: { width: 1280, height: 720 }
+    }
 });
 
 // ========== QR CODE ==========
 client.on('qr', qr => {
     ultimoQRCode = qr;
-    console.log('📱 QR Code gerado. Escaneie pela URL pública.');
+    console.log('\n📱 QR Code gerado! Acesse a URL pública da Railway para escanear.\n');
     qrcode.generate(qr, { small: true });
 });
 
-// ========== BOT PRONTO – LISTA GRUPOS E CANAIS NOS LOGS ==========
+// ========== BOT PRONTO ==========
 client.on('ready', async () => {
-    console.log('\n✅ Bot ONLINE!');
-    console.log('📋 Listando todos os grupos e canais que o bot participa:\n');
+    ultimoQRCode = null; // Limpa o QR code após conectar
+    console.log('\n✅ Bot ONLINE! Funcionando em TODOS os grupos e conversas.');
+    console.log('🎴 Envie uma imagem, gif ou vídeo para qualquer chat e vire figurinha!\n');
+
+    // Lista grupos para referência
     const chats = await client.getChats();
-    for (const chat of chats) {
-        if (chat.isGroup) {
-            console.log(`👥 GRUPO -> Nome: ${chat.name} | ID: ${chat.id._serialized}`);
-        } else if (chat.isChannel) {
-            console.log(`📢 CANAL -> Nome: ${chat.name} | ID: ${chat.id._serialized}`);
-        }
+    const grupos = chats.filter(c => c.isGroup);
+    console.log(`📋 Grupos que o bot participa (${grupos.length}):`);
+    for (const g of grupos) {
+        console.log(`   👥 ${g.name} — ${g.id._serialized}`);
     }
-    console.log('\n⚠️ Copie os IDs acima e cole no código (GRUPO_ID e CANAL_ID)');
-    console.log(`👥 Grupo configurado: ${GRUPO_ID}`);
-    console.log(`📢 Canal configurado: ${CANAL_ID}`);
+    console.log('');
 });
 
-// ========== FUNÇÃO DE CONVERSÃO (IMAGEM OU VÍDEO) ==========
+// ========== FUNÇÃO DE CONVERSÃO ==========
 async function converterParaSticker(buffer, mimeType) {
-    if (mimeType.startsWith('video/')) {
-        const inputPath = path.join(PASTA_TEMP, `input_${Date.now()}.mp4`);
+    console.log(`🔄 Convertendo mídia: ${mimeType} (${(buffer.length / 1024).toFixed(1)} KB)`);
+
+    if (mimeType.startsWith('video/') || mimeType === 'image/gif') {
+        // Vídeo ou GIF animado → WebP animado
+        const inputExt  = mimeType === 'image/gif' ? 'gif' : 'mp4';
+        const inputPath  = path.join(PASTA_TEMP, `input_${Date.now()}.${inputExt}`);
         const outputPath = path.join(PASTA_TEMP, `output_${Date.now()}.webp`);
+
         fs.writeFileSync(inputPath, buffer);
-        const scaleFilter = `scale=${TAMANHO_STICKER}:${TAMANHO_STICKER}:force_original_aspect_ratio=1,pad=${TAMANHO_STICKER}:${TAMANHO_STICKER}:(ow-iw)/2:(oh-ih)/2:black`;
-        const cmd = `ffmpeg -i "${inputPath}" -t 15 -r 15 -c:v libwebp -q:v 80 -vf "${scaleFilter}" -loop 0 -vsync 0 "${outputPath}" -y`;
-        await execPromise(cmd);
+
+        const scaleFilter = [
+            `scale=${TAMANHO_STICKER}:${TAMANHO_STICKER}`,
+            'force_original_aspect_ratio=decrease',
+            `pad=${TAMANHO_STICKER}:${TAMANHO_STICKER}:(ow-iw)/2:(oh-ih)/2:0x00000000`
+        ].join(':');
+
+        const cmd = `ffmpeg -i "${inputPath}" -t 10 -r 15 -vf "${scaleFilter}" -c:v libwebp -q:v 80 -loop 0 -vsync 0 "${outputPath}" -y 2>&1`;
+
+        try {
+            await execPromise(cmd);
+        } catch (ffmpegErr) {
+            console.error('❌ Erro ffmpeg:', ffmpegErr.message?.substring(0, 200));
+            throw new Error('Falha na conversão de vídeo/gif com ffmpeg');
+        }
+
         const outputBuffer = fs.readFileSync(outputPath);
         fs.unlinkSync(inputPath);
         fs.unlinkSync(outputPath);
         return outputBuffer;
+
     } else {
+        // Imagem estática → WebP
         return await sharp(buffer)
-            .resize(TAMANHO_STICKER, TAMANHO_STICKER, { fit: 'cover', position: 'centre' })
+            .resize(TAMANHO_STICKER, TAMANHO_STICKER, {
+                fit: 'contain',
+                background: { r: 0, g: 0, b: 0, alpha: 0 }
+            })
             .webp({ quality: 80 })
             .toBuffer();
     }
 }
 
-// ========== PROCESSAMENTO DE MENSAGENS NO GRUPO ==========
-client.on('message', async (msg) => {
-    // Ignora mensagens enviadas pelo próprio bot (evita loop)
+// ========== PROCESSAMENTO DE MENSAGENS ==========
+// Controle de mensagens em processamento (evita duplicatas)
+const emProcessamento = new Set();
+
+client.on('message_create', async (msg) => {
+    // Ignora mensagens do próprio bot
     if (msg.fromMe) return;
-    // Só processa se for no grupo específico
-    if (msg.from !== GRUPO_ID) return;
-    // Só processa se tiver mídia
+
+    // Ignora se não tiver mídia
     if (!msg.hasMedia) return;
 
-    console.log(`🔔 Nova mídia no grupo: ${msg.id._serialized} - ${msg.author || 'alguém'}`);
+    // Evita processar a mesma mensagem duas vezes
+    const msgId = msg.id._serialized;
+    if (emProcessamento.has(msgId)) return;
+    emProcessamento.add(msgId);
+
+    // Limpa o controle após 30s
+    setTimeout(() => emProcessamento.delete(msgId), 30000);
+
+    const chatId = msg.from;
+    console.log(`\n🔔 Nova mídia recebida de: ${chatId}`);
+    console.log(`   ID: ${msgId}`);
 
     try {
         // 1. Baixar a mídia
         const media = await msg.downloadMedia();
-        if (!media?.data) throw new Error('Falha ao baixar mídia');
-        const buffer = Buffer.from(media.data, 'base64');
-        const mimeType = media.mimetype;
-        console.log(`📁 Arquivo: ${mimeType} (${buffer.length} bytes)`);
+        if (!media?.data) throw new Error('Falha ao baixar mídia — dados vazios');
+
+        const buffer   = Buffer.from(media.data, 'base64');
+        const mimeType = media.mimetype || 'image/jpeg';
+
+        // Verifica se é um tipo de mídia suportado
+        const suportado = mimeType.startsWith('image/') || mimeType.startsWith('video/');
+        if (!suportado) {
+            console.log(`⏭️ Tipo não suportado para sticker: ${mimeType}`);
+            emProcessamento.delete(msgId);
+            return;
+        }
 
         // 2. Converter para sticker
         const webpBuffer = await converterParaSticker(buffer, mimeType);
         console.log(`📦 Sticker gerado: ${(webpBuffer.length / 1024).toFixed(2)} KB`);
 
-        // 3. Obter nome do autor
-        const contato = await msg.getContact();
-        const nomeAutor = contato.pushname || contato.name || contato.number || 'Usuário';
+        // 3. Nome do autor
+        let nomeAutor = 'FigurinhaBot';
+        try {
+            const contato = await msg.getContact();
+            nomeAutor = contato.pushname || contato.name || contato.number || 'FigurinhaBot';
+        } catch (_) {}
 
-        // 4. Criar objeto sticker
+        // 4. Montar e enviar o sticker no mesmo chat
         const sticker = new MessageMedia('image/webp', webpBuffer.toString('base64'));
 
-        // 5. Enviar sticker para o canal público
-        if (CANAL_ID && CANAL_ID !== '000000000000000000@newsletter') {
-            await client.sendMessage(CANAL_ID, sticker, {
-                sendMediaAsSticker: true,
-                stickerName: '🎴',
-                stickerAuthor: nomeAutor
-            });
-            console.log(`✅ Figurinha de ${nomeAutor} publicada no canal.`);
-        } else {
-            console.warn('⚠️ Canal não configurado. Figurinha não enviada.');
-        }
-
-        // 6. Enviar sticker para o grupo (no lugar da imagem original)
-        await client.sendMessage(GRUPO_ID, sticker, {
+        await client.sendMessage(chatId, sticker, {
             sendMediaAsSticker: true,
             stickerName: '🎴',
             stickerAuthor: nomeAutor
         });
-        console.log(`✅ Figurinha de ${nomeAutor} publicada no grupo.`);
+        console.log(`✅ Figurinha de "${nomeAutor}" enviada para ${chatId}`);
 
-        // 7. Apagar a mensagem original (a imagem/vídeo enviada)
-        await msg.delete(true);
-        console.log(`🗑️ Mensagem original apagada do grupo.`);
+        // 5. Apagar a mensagem original
+        // Nota: só é possível apagar para todos se o bot for admin no grupo
+        // ou se a mensagem for do próprio bot. Em chats privados, só apaga para si.
+        try {
+            await msg.delete(true);
+            console.log(`🗑️ Mensagem original apagada.`);
+        } catch (delErr) {
+            console.warn(`⚠️ Não foi possível apagar a mensagem original: ${delErr.message}`);
+            // Tenta apagar só para o bot
+            try {
+                await msg.delete(false);
+                console.log(`🗑️ Mensagem apagada apenas para o bot.`);
+            } catch (_) {}
+        }
 
     } catch (err) {
-        console.error('❌ Erro no processamento:', err.message);
-        // Em caso de erro, não apaga a mensagem original
+        console.error(`❌ Erro ao processar mídia: ${err.message}`);
+    } finally {
+        emProcessamento.delete(msgId);
     }
 });
 
 // ========== RECONEXÃO AUTOMÁTICA ==========
 client.on('disconnected', (reason) => {
-    console.log('🔌 Desconectado:', reason);
-    setTimeout(() => client.initialize(), 10000);
+    console.log(`\n🔌 Bot desconectado: ${reason}`);
+    console.log('🔄 Reconectando em 15 segundos...\n');
+    setTimeout(() => client.initialize(), 15000);
 });
 
-client.on('error', (err) => console.error('Erro no cliente:', err));
+client.on('auth_failure', (msg) => {
+    console.error('🔐 Falha de autenticação:', msg);
+    console.log('💡 Dica: apague a pasta .wwebjs_auth e reinicie para gerar novo QR Code.');
+});
+
+client.on('error', (err) => console.error('❌ Erro no cliente:', err));
 
 // Limpeza do perfil temporário ao encerrar
-process.on('exit', () => {
-    try { fs.rmSync(profileDir, { recursive: true, force: true }); } catch (e) {}
-});
+process.on('SIGINT',  () => limpar());
+process.on('SIGTERM', () => limpar());
+process.on('exit',    () => limpar());
 
+function limpar() {
+    try { fs.rmSync(profileDir, { recursive: true, force: true }); } catch (_) {}
+    process.exit(0);
+}
+
+// ========== INICIAR ==========
 client.initialize();
-console.log('🚀 Bot iniciado. Aguarde o QR Code...');
+console.log('🚀 FigurinhaBot iniciando... Aguarde o QR Code ou a reconexão automática.');
