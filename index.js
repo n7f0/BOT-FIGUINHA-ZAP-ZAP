@@ -1,12 +1,3 @@
-/**
- * 🎴 Sticker Bot WhatsApp - Envio automático para canal
- * 
- * - Envie qualquer imagem, GIF ou vídeo para o bot
- * - Ele converte em figurinha (sticker) e publica no canal
- * - Autor da figurinha = nome da pessoa no WhatsApp
- * - Acesse a URL pública para escanear o QR Code
- */
-
 const { Client, LocalAuth, MessageMedia } = require('whatsapp-web.js');
 const qrcode = require('qrcode-terminal');
 const sharp = require('sharp');
@@ -18,16 +9,14 @@ const express = require('express');
 const qrImage = require('qr-image');
 
 const execPromise = util.promisify(exec);
-const { execSync } = require('child_process');
 
 // ========== CONFIGURAÇÕES ==========
 const TAMANHO_STICKER = 512;
 const PASTA_TEMP = path.join(__dirname, 'temp');
 if (!fs.existsSync(PASTA_TEMP)) fs.mkdirSync(PASTA_TEMP);
 
-// ========== ID DO CANAL (preenchido automaticamente ou manualmente) ==========
-let channelId = null;
-const CANAL_INVITE_CODE = '0029VbCavfI4yltXyM8WUF1W'; // código do link fornecido
+// 👇 COLOQUE AQUI O ID DO SEU CANAL (obtido via comando !listar_canais)
+const ID_DO_CANAL = '000000000000000000@newsletter'; // SUBSTITUA PELO ID REAL
 
 // ========== SERVIDOR HTTP ==========
 let ultimoQRCode = null;
@@ -44,7 +33,7 @@ app.get('/', (req, res) => {
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`✅ Servidor HTTP na porta ${PORT}`));
 
-// ========== PERFIL EFÊMERO DO CHROMIUM (evita lock) ==========
+// ========== PERFIL EFÊMERO DO CHROMIUM ==========
 const profileDir = `/tmp/chrome-profile-${Date.now()}`;
 fs.mkdirSync(profileDir, { recursive: true });
 console.log(`📁 Perfil Chromium: ${profileDir}`);
@@ -64,50 +53,23 @@ if (process.platform === 'linux' && fs.existsSync('/usr/bin/chromium')) {
     console.log('✅ Usando Chromium do sistema');
 }
 
-// Verifica ffmpeg
-try {
-    execSync('ffmpeg -version', { stdio: 'ignore' });
-    console.log('✅ ffmpeg encontrado');
-} catch {
-    console.warn('⚠️ ffmpeg não encontrado. Vídeos e GIFs podem falhar.');
-}
-
-// ========== CLIENTE WHATSAPP ==========
 const client = new Client({
     authStrategy: new LocalAuth(),
     puppeteer: { headless: true, args: puppeteerArgs, executablePath, defaultViewport: { width: 1280, height: 720 } }
 });
 
-// ========== QR CODE ==========
 client.on('qr', qr => {
     ultimoQRCode = qr;
     console.log('📱 QR Code gerado. Escaneie pela URL pública.');
     qrcode.generate(qr, { small: true });
 });
 
-// ========== EVENTO DE PRONTO ==========
 client.on('ready', async () => {
-    console.log('✅ Bot ONLINE! Aguardando mídias para enviar ao canal...');
-    
-    // Tenta obter o ID do canal automaticamente
-    if (!channelId) {
-        console.log('🔍 Obtendo ID do canal a partir do código de convite...');
-        try {
-            const channel = await client.getChannelByInviteCode(CANAL_INVITE_CODE);
-            if (channel && channel.id) {
-                channelId = channel.id._serialized;
-                console.log(`✅ Canal encontrado! ID: ${channelId}`);
-                console.log(`📢 Nome do canal: ${channel.name || 'não informado'}`);
-            } else {
-                console.error('❌ Não foi possível encontrar o canal. Verifique se o bot está inscrito.');
-            }
-        } catch (err) {
-            console.error('❌ Erro ao obter canal:', err.message);
-        }
-    }
+    console.log('✅ Bot ONLINE! Enviando figurinhas para o canal...');
+    console.log(`📢 Canal configurado: ${ID_DO_CANAL}`);
 });
 
-// ========== FUNÇÕES DE CONVERSÃO ==========
+// ========== FUNÇÕES AUXILIARES ==========
 async function obterNomeContato(msg) {
     try {
         const contato = await msg.getContact();
@@ -124,20 +86,14 @@ async function converterImagemEstatica(buffer) {
         .toBuffer();
 }
 
-async function converterMidiaAnimada(inputBuffer, isVideo) {
-    const ext = isVideo ? 'mp4' : 'gif';
-    const inputPath = path.join(PASTA_TEMP, `input_${Date.now()}.${ext}`);
+async function converterVideoParaSticker(buffer) {
+    const inputPath = path.join(PASTA_TEMP, `input_${Date.now()}.mp4`);
     const outputPath = path.join(PASTA_TEMP, `output_${Date.now()}.webp`);
-    fs.writeFileSync(inputPath, inputBuffer);
+    fs.writeFileSync(inputPath, buffer);
     const scaleFilter = `scale=${TAMANHO_STICKER}:${TAMANHO_STICKER}:force_original_aspect_ratio=1,pad=${TAMANHO_STICKER}:${TAMANHO_STICKER}:(ow-iw)/2:(oh-ih)/2:black`;
-    let cmd = `ffmpeg -i "${inputPath}" -c:v libwebp -q:v 80 -vf "${scaleFilter}" -loop 0 -vsync 0 "${outputPath}" -y`;
-    if (isVideo) {
-        cmd = `ffmpeg -i "${inputPath}" -t 15 -r 15 -c:v libwebp -q:v 80 -vf "${scaleFilter}" -loop 0 -vsync 0 "${outputPath}" -y`;
-    }
-    console.log(`🔧 ffmpeg: ${cmd}`);
+    const cmd = `ffmpeg -i "${inputPath}" -t 15 -r 15 -c:v libwebp -q:v 80 -vf "${scaleFilter}" -loop 0 -vsync 0 "${outputPath}" -y`;
     try {
-        const { stderr } = await execPromise(cmd);
-        if (stderr) console.log('📢 ffmpeg stderr:', stderr.substring(0, 300));
+        await execPromise(cmd);
         const outputBuffer = fs.readFileSync(outputPath);
         fs.unlinkSync(inputPath);
         fs.unlinkSync(outputPath);
@@ -145,37 +101,44 @@ async function converterMidiaAnimada(inputBuffer, isVideo) {
     } catch (err) {
         if (fs.existsSync(inputPath)) fs.unlinkSync(inputPath);
         if (fs.existsSync(outputPath)) fs.unlinkSync(outputPath);
-        throw new Error(`Falha na conversão: ${err.message}`);
+        throw new Error(`Falha na conversão do vídeo: ${err.message}`);
     }
 }
 
 function isVideo(mimeType) { return mimeType?.startsWith('video/'); }
-function isGif(mimeType) { return mimeType === 'image/gif'; }
 
-// ========== TRATAMENTO DE MENSAGENS ==========
+// ========== COMANDO PARA LISTAR CANAIS (use uma única vez) ==========
 client.on('message', async (msg) => {
-    // Ignora comandos
-    if (msg.body?.trim()?.startsWith('!')) return;
+    if (msg.body === '!listar_canais') {
+        const chats = await client.getChats();
+        let resposta = "📢 Canais encontrados:\n";
+        for (const chat of chats) {
+            if (chat.isChannel) {
+                resposta += `- Nome: ${chat.name} | ID: ${chat.id._serialized}\n`;
+            }
+        }
+        await msg.reply(resposta || "Nenhum canal encontrado.");
+        return;
+    }
+
+    // Processa mídia enviada para o bot
     if (!msg.hasMedia) return;
-    if (!channelId) {
-        console.warn('⚠️ Canal ainda não identificado. Aguarde o bot obter o ID.');
+    if (ID_DO_CANAL === '000000000000000000@newsletter') {
+        await msg.reply('⚠️ Canal não configurado. Use !listar_canais para obter o ID e depois atualize o código.');
         return;
     }
 
     try {
         const media = await msg.downloadMedia();
-        if (!media?.data) throw new Error('Falha ao baixar mídia');
+        if (!media?.data) throw new Error('Falha ao baixar');
         const buffer = Buffer.from(media.data, 'base64');
         const mimeType = media.mimetype;
         console.log(`📁 Recebido: ${mimeType} (${buffer.length} bytes)`);
 
         let webpBuffer;
         if (isVideo(mimeType)) {
-            console.log('🎬 Convertendo vídeo...');
-            webpBuffer = await converterMidiaAnimada(buffer, true);
-        } else if (isGif(mimeType)) {
-            console.log('🎞️ Convertendo GIF...');
-            webpBuffer = await converterMidiaAnimada(buffer, false);
+            console.log('🎬 Convertendo vídeo para sticker animado...');
+            webpBuffer = await converterVideoParaSticker(buffer);
         } else {
             console.log('🖼️ Convertendo imagem...');
             webpBuffer = await converterImagemEstatica(buffer);
@@ -185,23 +148,19 @@ client.on('message', async (msg) => {
         const sticker = new MessageMedia('image/webp', webpBuffer.toString('base64'));
         console.log(`📦 Sticker gerado: ${(webpBuffer.length / 1024).toFixed(2)} KB`);
 
-        // Envia para o canal
-        await client.sendMessage(channelId, sticker, {
+        await client.sendMessage(ID_DO_CANAL, sticker, {
             sendMediaAsSticker: true,
             stickerName: '🎴',
             stickerAuthor: nomeAutor
         });
-        
-        // Confirma para o remetente
-        await msg.reply(`✅ Sua figurinha foi enviada para o canal! Autor: ${nomeAutor}`);
-        console.log(`✅ Sticker de "${nomeAutor}" publicado no canal.`);
+        await msg.reply(`✅ Sua figurinha foi publicada no canal! Autor: ${nomeAutor}`);
+        console.log(`✅ Publicado no canal por ${nomeAutor}`);
     } catch (err) {
         console.error('❌ Erro:', err.message);
-        await msg.reply('❌ Não foi possível converter. Tente outro arquivo (vídeo curto, MP4).');
+        await msg.reply('❌ Falha ao converter. Tente outro arquivo (curto, MP4).');
     }
 });
 
-// ========== RECONEXÃO ==========
 client.on('disconnected', (reason) => {
     console.log('🔌 Desconectado:', reason);
     setTimeout(() => client.initialize(), 10000);
