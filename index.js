@@ -11,13 +11,13 @@ const qrImage = require('qr-image');
 const execPromise = util.promisify(exec);
 
 // ========== CONFIGURAÇÕES ==========
-const TAMANHO_STICKER = 512;
+const TAMANHO_STICKER = 512;            // 512x512 pixels
 const PASTA_TEMP = path.join(__dirname, 'temp');
 if (!fs.existsSync(PASTA_TEMP)) fs.mkdirSync(PASTA_TEMP);
 
 // Limites do WhatsApp para stickers animados
-const MAX_STICKER_SIZE = 500 * 1024; // 500 KB
-const MAX_DURACAO = 6; // segundos
+const MAX_STICKER_SIZE = 500 * 1024;    // 500 KB
+const MAX_DURACAO = 6;                  // segundos
 const FPS_PADRAO = 15;
 
 // ========== SERVIDOR HTTP PARA QR CODE ==========
@@ -35,6 +35,7 @@ app.get('/', (req, res) => {
                 <h2>🎴 FigurinhaBot</h2>
                 <p>✅ Bot conectado e funcionando!</p>
                 <p style="color:#666;font-size:14px">Envie imagens, GIFs ou vídeos em qualquer conversa.</p>
+                <p style="color:#666;font-size:14px">Todas as figurinhas serão 512x512 pixels.</p>
             </body></html>
         `);
     }
@@ -137,7 +138,7 @@ async function converterParaSticker(buffer, mimeType) {
     }
 }
 
-// Conversão de imagem estática
+// Conversão de imagem estática (512x512 com fundo transparente)
 async function converterEstatico(buffer) {
     try {
         const webp = await sharp(buffer)
@@ -148,7 +149,7 @@ async function converterEstatico(buffer) {
             .webp({ quality: 90 })
             .toBuffer();
         
-        console.log(`✅ Sticker estático: ${(webp.length / 1024).toFixed(1)} KB`);
+        console.log(`✅ Sticker estático 512x512: ${(webp.length / 1024).toFixed(1)} KB`);
         return webp;
     } catch (err) {
         console.error('❌ Erro sharp:', err.message);
@@ -156,7 +157,7 @@ async function converterEstatico(buffer) {
     }
 }
 
-// Conversão de vídeo/GIF animado (CORRIGIDA: fundo transparente)
+// Conversão de vídeo/GIF animado (512x512 com fundo transparente)
 async function converterAnimado(buffer, mimeType) {
     const timestamp = Date.now();
     const inputExt = mimeType === 'image/gif' ? 'gif' : 'mp4';
@@ -164,33 +165,28 @@ async function converterAnimado(buffer, mimeType) {
     const outputPath = path.join(PASTA_TEMP, `output_${timestamp}.webp`);
 
     try {
-        // Salvar arquivo de entrada
         fs.writeFileSync(inputPath, buffer);
         console.log(`📁 Arquivo temporário: ${inputPath}`);
 
-        // Filtro de escala com padding transparente (alpha 0)
-        // Usa color=black@0.0 para garantir transparência
+        // Filtro: escala mantendo proporção e padding transparente para 512x512
+        // color=black@0.0 = preto 100% transparente
         const scaleFilter = `scale='min(${TAMANHO_STICKER},iw)':min'(${TAMANHO_STICKER},ih)':force_original_aspect_ratio=decrease,pad=${TAMANHO_STICKER}:${TAMANHO_STICKER}:(ow-iw)/2:(oh-ih)/2:color=black@0.0`;
         
         let qualidade = 80;
         let tentativas = 0;
         let sucesso = false;
-        let ultimoErro = null;
 
         while (!sucesso && tentativas < 3) {
             tentativas++;
             
-            // Comando ffmpeg corrigido:
-            // - pix_fmt yuva420p -> preserva canal alfa
-            // - libwebp_anim -> encoder para animações com transparência
             const cmd = [
                 'ffmpeg -y',
                 `-i "${inputPath}"`,
                 `-t ${MAX_DURACAO}`,
                 `-r ${FPS_PADRAO}`,
                 `-vf "${scaleFilter}"`,
-                `-pix_fmt yuva420p`,
-                `-c:v libwebp_anim`,
+                `-pix_fmt yuva420p`,           // Preserva transparência
+                `-c:v libwebp_anim`,            // Encoder para animações com alpha
                 `-q:v ${qualidade}`,
                 `-compression_level 6`,
                 `-loop 0`,
@@ -203,9 +199,8 @@ async function converterAnimado(buffer, mimeType) {
             console.log(`🎬 FFmpeg (tentativa ${tentativas}, qualidade ${qualidade})...`);
             
             try {
-                const { stdout, stderr } = await execPromise(cmd);
+                await execPromise(cmd);
                 
-                // Verifica se o arquivo foi criado
                 if (!fs.existsSync(outputPath)) {
                     throw new Error('Arquivo WebP não foi gerado');
                 }
@@ -214,46 +209,40 @@ async function converterAnimado(buffer, mimeType) {
                 const outputSize = outputBuffer.length;
                 const outputKB = (outputSize / 1024).toFixed(1);
 
-                console.log(`📦 WebP gerado: ${outputKB} KB`);
+                console.log(`📦 WebP animado 512x512 gerado: ${outputKB} KB`);
 
-                // Verifica se está dentro do limite
                 if (outputSize <= MAX_STICKER_SIZE) {
                     sucesso = true;
-                    // Limpeza
                     fs.unlinkSync(inputPath);
                     fs.unlinkSync(outputPath);
-                    console.log(`✅ Sticker animado transparente criado!`);
+                    console.log(`✅ Sticker animado 512x512 transparente criado!`);
                     return outputBuffer;
                 } else {
-                    console.warn(`⚠️ Arquivo muito grande (${outputKB} KB > 500 KB), tentando qualidade menor...`);
-                    qualidade -= 20; // Reduz qualidade
+                    console.warn(`⚠️ Tamanho ${outputKB}KB > 500KB, reduzindo qualidade...`);
+                    qualidade -= 20;
                     if (fs.existsSync(outputPath)) fs.unlinkSync(outputPath);
                 }
 
             } catch (ffmpegErr) {
-                ultimoErro = ffmpegErr;
                 console.error(`❌ Erro ffmpeg (tentativa ${tentativas}):`, ffmpegErr.message?.substring(0, 300));
                 if (fs.existsSync(outputPath)) fs.unlinkSync(outputPath);
             }
         }
 
-        // Se não conseguiu criar animado, tenta criar estático como fallback
-        console.warn('⚠️ Falha ao criar sticker animado. Criando versão estática...');
-        if (fs.existsSync(inputPath)) fs.unlinkSync(inputPath);
-        
-        // Extrai primeiro frame e converte para estático
+        // Fallback: sticker estático a partir do primeiro frame
+        console.warn('⚠️ Falha ao criar sticker animado. Criando versão estática 512x512...');
+        fs.unlinkSync(inputPath);
         return await extrairPrimeiroFrame(buffer, mimeType);
 
     } catch (err) {
         console.error('❌ Erro geral na conversão animada:', err.message);
-        // Limpa arquivos temporários
         if (fs.existsSync(inputPath)) fs.unlinkSync(inputPath);
         if (fs.existsSync(outputPath)) fs.unlinkSync(outputPath);
         throw err;
     }
 }
 
-// Fallback: extrai primeiro frame do vídeo/GIF
+// Fallback: extrai primeiro frame do vídeo/GIF e gera sticker estático 512x512
 async function extrairPrimeiroFrame(buffer, mimeType) {
     const timestamp = Date.now();
     const inputExt = mimeType === 'image/gif' ? 'gif' : 'mp4';
@@ -270,7 +259,7 @@ async function extrairPrimeiroFrame(buffer, mimeType) {
         fs.unlinkSync(inputPath);
         fs.unlinkSync(framePath);
 
-        console.log('📸 Primeiro frame extraído, convertendo para sticker...');
+        console.log('📸 Primeiro frame extraído, convertendo para sticker estático 512x512...');
         return await converterEstatico(frameBuffer);
 
     } catch (err) {
@@ -297,7 +286,6 @@ client.on('message_create', async (msg) => {
     console.log(`\n🔔 Nova mídia de: ${chatId}`);
 
     try {
-        // 1. Baixar mídia
         console.log('📥 Baixando mídia...');
         const media = await msg.downloadMedia();
         if (!media?.data) throw new Error('Falha ao baixar mídia');
@@ -305,7 +293,6 @@ client.on('message_create', async (msg) => {
         const buffer = Buffer.from(media.data, 'base64');
         const mimeType = media.mimetype || 'image/jpeg';
 
-        // Só processa imagens e vídeos
         const suportado = mimeType.startsWith('image/') || mimeType.startsWith('video/');
         if (!suportado) {
             console.log(`⏭️ Tipo não suportado: ${mimeType}`);
@@ -313,27 +300,23 @@ client.on('message_create', async (msg) => {
             return;
         }
 
-        // 2. Converter
         const webpBuffer = await converterParaSticker(buffer, mimeType);
 
-        // 3. Nome do autor
         let nomeAutor = 'Bot';
         try {
             const contato = await msg.getContact();
             nomeAutor = contato.pushname || contato.name || contato.number || 'Bot';
         } catch (_) {}
 
-        // 4. Enviar sticker
         const sticker = new MessageMedia('image/webp', webpBuffer.toString('base64'), 'sticker.webp');
 
         await client.sendMessage(chatId, sticker, {
             sendMediaAsSticker: true,
-            stickerName: '🎴',
+            stickerName: '512x512',
             stickerAuthor: nomeAutor
         });
-        console.log(`✅ Figurinha enviada (autor: ${nomeAutor})`);
+        console.log(`✅ Figurinha 512x512 enviada (autor: ${nomeAutor})`);
 
-        // 5. Apagar original
         try {
             await msg.delete(true);
             console.log(`🗑️ Original apagada para todos`);
@@ -381,4 +364,4 @@ function limpar() {
 
 // ========== INICIAR ==========
 client.initialize();
-console.log('🚀 FigurinhaBot iniciando...');
+console.log('🚀 FigurinhaBot iniciando... (tamanho: 512x512 pixels)');
