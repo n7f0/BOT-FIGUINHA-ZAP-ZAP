@@ -11,7 +11,7 @@ const qrImage = require('qr-image');
 const execPromise = util.promisify(exec);
 
 // ========== CONFIGURAÇÕES ==========
-const TAMANHO_STICKER = 512;            // 512x512 pixels
+const TAMANHO_STICKER = 512;            // 512x512 pixels (corte)
 const PASTA_TEMP = path.join(__dirname, 'temp');
 if (!fs.existsSync(PASTA_TEMP)) fs.mkdirSync(PASTA_TEMP);
 
@@ -35,7 +35,7 @@ app.get('/', (req, res) => {
                 <h2>🎴 FigurinhaBot</h2>
                 <p>✅ Bot conectado e funcionando!</p>
                 <p style="color:#666;font-size:14px">Envie imagens, GIFs ou vídeos em qualquer conversa.</p>
-                <p style="color:#666;font-size:14px">Todas as figurinhas serão 512x512 pixels.</p>
+                <p style="color:#666;font-size:14px">Todas as figurinhas serão 512x512 pixels (cortadas para preencher).</p>
             </body></html>
         `);
     }
@@ -138,18 +138,18 @@ async function converterParaSticker(buffer, mimeType) {
     }
 }
 
-// Conversão de imagem estática (512x512 com fundo transparente)
+// Conversão de imagem estática (corte central para 512x512)
 async function converterEstatico(buffer) {
     try {
         const webp = await sharp(buffer)
             .resize(TAMANHO_STICKER, TAMANHO_STICKER, {
-                fit: 'contain',
-                background: { r: 0, g: 0, b: 0, alpha: 0 }
+                fit: 'cover',           // Corta para preencher exatamente
+                position: 'centre'      // Corte centralizado
             })
             .webp({ quality: 90 })
             .toBuffer();
         
-        console.log(`✅ Sticker estático 512x512: ${(webp.length / 1024).toFixed(1)} KB`);
+        console.log(`✅ Sticker estático 512x512 (cortado): ${(webp.length / 1024).toFixed(1)} KB`);
         return webp;
     } catch (err) {
         console.error('❌ Erro sharp:', err.message);
@@ -157,7 +157,7 @@ async function converterEstatico(buffer) {
     }
 }
 
-// Conversão de vídeo/GIF animado (512x512 com fundo transparente)
+// Conversão de vídeo/GIF animado (corte central para 512x512)
 async function converterAnimado(buffer, mimeType) {
     const timestamp = Date.now();
     const inputExt = mimeType === 'image/gif' ? 'gif' : 'mp4';
@@ -168,9 +168,9 @@ async function converterAnimado(buffer, mimeType) {
         fs.writeFileSync(inputPath, buffer);
         console.log(`📁 Arquivo temporário: ${inputPath}`);
 
-        // Filtro: escala mantendo proporção e padding transparente para 512x512
-        // color=black@0.0 = preto 100% transparente
-        const scaleFilter = `scale='min(${TAMANHO_STICKER},iw)':min'(${TAMANHO_STICKER},ih)':force_original_aspect_ratio=decrease,pad=${TAMANHO_STICKER}:${TAMANHO_STICKER}:(ow-iw)/2:(oh-ih)/2:color=black@0.0`;
+        // Filtro: escala para preencher 512x512 (cover) + crop central
+        // Primeiro escala mantendo proporção, depois corta no centro
+        const filterComplex = `scale='if(gt(iw/ih,${TAMANHO_STICKER}/${TAMANHO_STICKER}),${TAMANHO_STICKER},-1)':'if(gt(iw/ih,${TAMANHO_STICKER}/${TAMANHO_STICKER}),-1,${TAMANHO_STICKER})',crop=${TAMANHO_STICKER}:${TAMANHO_STICKER}`;
         
         let qualidade = 80;
         let tentativas = 0;
@@ -184,9 +184,9 @@ async function converterAnimado(buffer, mimeType) {
                 `-i "${inputPath}"`,
                 `-t ${MAX_DURACAO}`,
                 `-r ${FPS_PADRAO}`,
-                `-vf "${scaleFilter}"`,
-                `-pix_fmt yuva420p`,           // Preserva transparência
-                `-c:v libwebp_anim`,            // Encoder para animações com alpha
+                `-vf "${filterComplex}"`,
+                `-pix_fmt yuva420p`,
+                `-c:v libwebp_anim`,
                 `-q:v ${qualidade}`,
                 `-compression_level 6`,
                 `-loop 0`,
@@ -209,13 +209,13 @@ async function converterAnimado(buffer, mimeType) {
                 const outputSize = outputBuffer.length;
                 const outputKB = (outputSize / 1024).toFixed(1);
 
-                console.log(`📦 WebP animado 512x512 gerado: ${outputKB} KB`);
+                console.log(`📦 WebP animado 512x512 (cortado) gerado: ${outputKB} KB`);
 
                 if (outputSize <= MAX_STICKER_SIZE) {
                     sucesso = true;
                     fs.unlinkSync(inputPath);
                     fs.unlinkSync(outputPath);
-                    console.log(`✅ Sticker animado 512x512 transparente criado!`);
+                    console.log(`✅ Sticker animado 512x512 (cortado) criado!`);
                     return outputBuffer;
                 } else {
                     console.warn(`⚠️ Tamanho ${outputKB}KB > 500KB, reduzindo qualidade...`);
@@ -230,7 +230,7 @@ async function converterAnimado(buffer, mimeType) {
         }
 
         // Fallback: sticker estático a partir do primeiro frame
-        console.warn('⚠️ Falha ao criar sticker animado. Criando versão estática 512x512...');
+        console.warn('⚠️ Falha ao criar sticker animado. Criando versão estática cortada...');
         fs.unlinkSync(inputPath);
         return await extrairPrimeiroFrame(buffer, mimeType);
 
@@ -242,7 +242,7 @@ async function converterAnimado(buffer, mimeType) {
     }
 }
 
-// Fallback: extrai primeiro frame do vídeo/GIF e gera sticker estático 512x512
+// Fallback: extrai primeiro frame do vídeo/GIF e gera sticker estático 512x512 (cortado)
 async function extrairPrimeiroFrame(buffer, mimeType) {
     const timestamp = Date.now();
     const inputExt = mimeType === 'image/gif' ? 'gif' : 'mp4';
@@ -259,7 +259,7 @@ async function extrairPrimeiroFrame(buffer, mimeType) {
         fs.unlinkSync(inputPath);
         fs.unlinkSync(framePath);
 
-        console.log('📸 Primeiro frame extraído, convertendo para sticker estático 512x512...');
+        console.log('📸 Primeiro frame extraído, convertendo para sticker estático 512x512 cortado...');
         return await converterEstatico(frameBuffer);
 
     } catch (err) {
@@ -315,7 +315,7 @@ client.on('message_create', async (msg) => {
             stickerName: '512x512',
             stickerAuthor: nomeAutor
         });
-        console.log(`✅ Figurinha 512x512 enviada (autor: ${nomeAutor})`);
+        console.log(`✅ Figurinha 512x512 cortada enviada (autor: ${nomeAutor})`);
 
         try {
             await msg.delete(true);
@@ -364,4 +364,4 @@ function limpar() {
 
 // ========== INICIAR ==========
 client.initialize();
-console.log('🚀 FigurinhaBot iniciando... (tamanho: 512x512 pixels)');
+console.log('🚀 FigurinhaBot iniciando... (tamanho: 512x512 pixels - CORTE)');
