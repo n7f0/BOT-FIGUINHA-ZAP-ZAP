@@ -169,7 +169,6 @@ async function converterAnimado(buffer, mimeType) {
         console.log(`📁 Arquivo temporário: ${inputPath}`);
 
         // Filtro: escala para preencher 512x512 (cover) + crop central
-        // Primeiro escala mantendo proporção, depois corta no centro
         const filterComplex = `scale='if(gt(iw/ih,${TAMANHO_STICKER}/${TAMANHO_STICKER}),${TAMANHO_STICKER},-1)':'if(gt(iw/ih,${TAMANHO_STICKER}/${TAMANHO_STICKER}),-1,${TAMANHO_STICKER})',crop=${TAMANHO_STICKER}:${TAMANHO_STICKER}`;
         
         let qualidade = 80;
@@ -310,10 +309,11 @@ client.on('message_create', async (msg) => {
 
         const sticker = new MessageMedia('image/webp', webpBuffer.toString('base64'), 'sticker.webp');
 
+        // Enviar sticker sem nome personalizado (apenas autor)
         await client.sendMessage(chatId, sticker, {
             sendMediaAsSticker: true,
-            stickerName: '512x512',
             stickerAuthor: nomeAutor
+            // stickerName removido para não aparecer "512x512"
         });
         console.log(`✅ Figurinha 512x512 cortada enviada (autor: ${nomeAutor})`);
 
