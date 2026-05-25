@@ -156,7 +156,7 @@ async function converterEstatico(buffer) {
     }
 }
 
-// Conversão de vídeo/GIF animado
+// Conversão de vídeo/GIF animado (CORRIGIDA: fundo transparente)
 async function converterAnimado(buffer, mimeType) {
     const timestamp = Date.now();
     const inputExt = mimeType === 'image/gif' ? 'gif' : 'mp4';
@@ -168,31 +168,33 @@ async function converterAnimado(buffer, mimeType) {
         fs.writeFileSync(inputPath, buffer);
         console.log(`📁 Arquivo temporário: ${inputPath}`);
 
-        // Comando ffmpeg otimizado para WhatsApp
-        // 1. Escala mantendo proporção
-        // 2. Adiciona padding transparente
-        // 3. Reduz qualidade progressivamente até caber em 500KB
-        const scaleFilter = `scale='min(${TAMANHO_STICKER},iw)':min'(${TAMANHO_STICKER},ih)':force_original_aspect_ratio=decrease,pad=${TAMANHO_STICKER}:${TAMANHO_STICKER}:(ow-iw)/2:(oh-ih)/2:color=0x00000000`;
+        // Filtro de escala com padding transparente (alpha 0)
+        // Usa color=black@0.0 para garantir transparência
+        const scaleFilter = `scale='min(${TAMANHO_STICKER},iw)':min'(${TAMANHO_STICKER},ih)':force_original_aspect_ratio=decrease,pad=${TAMANHO_STICKER}:${TAMANHO_STICKER}:(ow-iw)/2:(oh-ih)/2:color=black@0.0`;
         
-        // Tenta com qualidade 80 primeiro
         let qualidade = 80;
         let tentativas = 0;
         let sucesso = false;
+        let ultimoErro = null;
 
         while (!sucesso && tentativas < 3) {
             tentativas++;
             
+            // Comando ffmpeg corrigido:
+            // - pix_fmt yuva420p -> preserva canal alfa
+            // - libwebp_anim -> encoder para animações com transparência
             const cmd = [
                 'ffmpeg -y',
                 `-i "${inputPath}"`,
                 `-t ${MAX_DURACAO}`,
                 `-r ${FPS_PADRAO}`,
                 `-vf "${scaleFilter}"`,
-                `-c:v libwebp`,
+                `-pix_fmt yuva420p`,
+                `-c:v libwebp_anim`,
                 `-q:v ${qualidade}`,
                 `-compression_level 6`,
                 `-loop 0`,
-                `-an`, // Remove áudio
+                `-an`,
                 `-vsync 0`,
                 `"${outputPath}"`,
                 '2>&1'
@@ -217,9 +219,10 @@ async function converterAnimado(buffer, mimeType) {
                 // Verifica se está dentro do limite
                 if (outputSize <= MAX_STICKER_SIZE) {
                     sucesso = true;
+                    // Limpeza
                     fs.unlinkSync(inputPath);
                     fs.unlinkSync(outputPath);
-                    console.log(`✅ Sticker animado criado com sucesso!`);
+                    console.log(`✅ Sticker animado transparente criado!`);
                     return outputBuffer;
                 } else {
                     console.warn(`⚠️ Arquivo muito grande (${outputKB} KB > 500 KB), tentando qualidade menor...`);
@@ -228,6 +231,7 @@ async function converterAnimado(buffer, mimeType) {
                 }
 
             } catch (ffmpegErr) {
+                ultimoErro = ffmpegErr;
                 console.error(`❌ Erro ffmpeg (tentativa ${tentativas}):`, ffmpegErr.message?.substring(0, 300));
                 if (fs.existsSync(outputPath)) fs.unlinkSync(outputPath);
             }
@@ -235,7 +239,7 @@ async function converterAnimado(buffer, mimeType) {
 
         // Se não conseguiu criar animado, tenta criar estático como fallback
         console.warn('⚠️ Falha ao criar sticker animado. Criando versão estática...');
-        fs.unlinkSync(inputPath);
+        if (fs.existsSync(inputPath)) fs.unlinkSync(inputPath);
         
         // Extrai primeiro frame e converte para estático
         return await extrairPrimeiroFrame(buffer, mimeType);
