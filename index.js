@@ -207,16 +207,30 @@ async function converterAnimado(buffer, mimeType) {
 
         while (!sucesso && tentativas < 3) {
             tentativas++;
-            // Usa codec webp genérico (compatível com versões do ffmpeg no Railway)
-            const cmd = `ffmpeg -y -i "${inputPath}" -t ${MAX_DURACAO} -r ${FPS_PADRAO} -vf "${filterComplex}" -pix_fmt yuv420p -c:v webp -quality ${qualidade} -loop 0 -an -vsync 0 "${outputPath}" 2>&1`;
+            // Primeiro teste com codec webp (genérico)
+            let cmd = `ffmpeg -y -i "${inputPath}" -t ${MAX_DURACAO} -r ${FPS_PADRAO} -vf "${filterComplex}" -pix_fmt yuv420p -c:v webp -quality ${qualidade} -loop 0 -an -vsync 0 "${outputPath}" 2>&1`;
             
-            console.log(`🎬 Tentativa ${tentativas} - qualidade ${qualidade}`);
+            console.log(`🎬 Tentativa ${tentativas} - codec webp, qualidade ${qualidade}`);
             try {
                 await execPromise(cmd);
-                if (!fs.existsSync(outputPath)) throw new Error('Arquivo não gerado');
+            } catch (err) {
+                console.log(`   webp falhou: ${err.message.substring(0, 100)}`);
+            }
+
+            if (!fs.existsSync(outputPath)) {
+                console.warn(`⚠️ Arquivo não criado com codec webp. Tentando libwebp_anim...`);
+                cmd = `ffmpeg -y -i "${inputPath}" -t ${MAX_DURACAO} -r ${FPS_PADRAO} -vf "${filterComplex}" -pix_fmt yuv420p -c:v libwebp_anim -q:v ${qualidade} -compression_level 6 -loop 0 -an -vsync 0 "${outputPath}" 2>&1`;
+                try {
+                    await execPromise(cmd);
+                } catch (err) {
+                    console.log(`   libwebp_anim falhou: ${err.message.substring(0, 100)}`);
+                }
+            }
+
+            if (fs.existsSync(outputPath)) {
                 outputBuffer = fs.readFileSync(outputPath);
                 const sizeKB = (outputBuffer.length / 1024).toFixed(1);
-                console.log(`📦 Gerado: ${sizeKB} KB`);
+                console.log(`📦 WebP gerado: ${sizeKB} KB`);
                 if (outputBuffer.length <= MAX_STICKER_SIZE) {
                     sucesso = true;
                 } else {
@@ -224,29 +238,29 @@ async function converterAnimado(buffer, mimeType) {
                     qualidade -= 20;
                     fs.unlinkSync(outputPath);
                 }
-            } catch (ffmpegErr) {
-                console.error(`❌ Erro ffmpeg tentativa ${tentativas}:`, ffmpegErr.message?.substring(0, 200));
-                if (fs.existsSync(outputPath)) fs.unlinkSync(outputPath);
+            } else {
+                console.error(`❌ Falha: ffmpeg não gerou o arquivo ${outputPath}`);
+                break;
             }
         }
 
         fs.unlinkSync(inputPath);
         if (sucesso && outputBuffer) {
             fs.unlinkSync(outputPath);
-            console.log(`✅ Sticker animado criado!`);
+            console.log(`✅ Sticker animado criado com sucesso!`);
             return outputBuffer;
         }
 
-        console.warn('⚠️ Falha no animado, criando estático...');
+        console.warn('⚠️ Criando sticker estático como fallback...');
         return await extrairPrimeiroFrame(buffer, mimeType);
 
     } catch (err) {
-        console.error('❌ Erro geral conversão animada:', err.message);
+        console.error('❌ Erro na conversão animada:', err.message);
         try {
             if (fs.existsSync(inputPath)) fs.unlinkSync(inputPath);
             if (fs.existsSync(outputPath)) fs.unlinkSync(outputPath);
         } catch (_) {}
-        throw err;
+        return await extrairPrimeiroFrame(buffer, mimeType);
     }
 }
 
