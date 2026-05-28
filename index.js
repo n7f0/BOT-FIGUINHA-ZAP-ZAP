@@ -80,7 +80,7 @@ const puppeteerArgs = [
     '--log-level=3',
     '--silent',
     '--remote-debugging-port=0',
-    '--no-singleton-check'       // CRUCIAL para evitar "profile in use"
+    '--no-singleton-check'       // Crucial para evitar "profile in use"
 ];
 
 // Detecta Chromium (prioriza o instalado via nixpacks)
@@ -129,9 +129,12 @@ async function verificarFFmpeg() {
     try {
         const { stdout } = await execPromise('ffmpeg -version 2>&1 | head -n1');
         console.log(`✅ FFmpeg encontrado: ${stdout.trim()}`);
+        // Testa se o codec webp está disponível
+        const { stdout: encoders } = await execPromise('ffmpeg -encoders 2>/dev/null | grep -E "webp|libwebp" || true');
+        console.log(`📼 Codecs WebP disponíveis:\n${encoders || 'nenhum específico'}`);
         return true;
     } catch (err) {
-        console.error('❌ FFmpeg não encontrado. Stickers animados não funcionarão.');
+        console.error('❌ FFmpeg NÃO ENCONTRADO! Stickers animados não funcionarão.');
         console.error('   Adicione "ffmpeg-full" à variável RAILPACK_PACKAGES e reimplante.');
         return false;
     }
@@ -178,12 +181,12 @@ async function extrairPrimeiroFrame(buffer, mimeType) {
         const frameBuffer = fs.readFileSync(framePath);
         fs.unlinkSync(inputPath);
         fs.unlinkSync(framePath);
-        console.log('📸 Frame extraído, convertendo estático...');
+        console.log('📸 Primeiro frame extraído, convertendo para estático...');
         return await converterEstatico(frameBuffer);
     } catch (err) {
         if (fs.existsSync(inputPath)) fs.unlinkSync(inputPath);
         if (fs.existsSync(framePath)) fs.unlinkSync(framePath);
-        throw new Error('Falha ao extrair frame');
+        throw new Error('Falha ao extrair primeiro frame');
     }
 }
 
@@ -207,24 +210,17 @@ async function converterAnimado(buffer, mimeType) {
 
         while (!sucesso && tentativas < 3) {
             tentativas++;
-            // Primeiro teste com codec webp (genérico)
+            // Tentativa 1: codec webp (genérico)
             let cmd = `ffmpeg -y -i "${inputPath}" -t ${MAX_DURACAO} -r ${FPS_PADRAO} -vf "${filterComplex}" -pix_fmt yuv420p -c:v webp -quality ${qualidade} -loop 0 -an -vsync 0 "${outputPath}" 2>&1`;
-            
             console.log(`🎬 Tentativa ${tentativas} - codec webp, qualidade ${qualidade}`);
             try {
                 await execPromise(cmd);
-            } catch (err) {
-                console.log(`   webp falhou: ${err.message.substring(0, 100)}`);
-            }
-
-            if (!fs.existsSync(outputPath)) {
-                console.warn(`⚠️ Arquivo não criado com codec webp. Tentando libwebp_anim...`);
+                if (!fs.existsSync(outputPath)) throw new Error('Arquivo não gerado');
+            } catch (e) {
+                // Tentativa 2: libwebp_anim (se disponível)
+                console.warn(`⚠️ codec webp falhou, tentando libwebp_anim...`);
                 cmd = `ffmpeg -y -i "${inputPath}" -t ${MAX_DURACAO} -r ${FPS_PADRAO} -vf "${filterComplex}" -pix_fmt yuv420p -c:v libwebp_anim -q:v ${qualidade} -compression_level 6 -loop 0 -an -vsync 0 "${outputPath}" 2>&1`;
-                try {
-                    await execPromise(cmd);
-                } catch (err) {
-                    console.log(`   libwebp_anim falhou: ${err.message.substring(0, 100)}`);
-                }
+                await execPromise(cmd);
             }
 
             if (fs.existsSync(outputPath)) {
@@ -244,6 +240,7 @@ async function converterAnimado(buffer, mimeType) {
             }
         }
 
+        // Limpeza
         fs.unlinkSync(inputPath);
         if (sucesso && outputBuffer) {
             fs.unlinkSync(outputPath);
@@ -251,11 +248,13 @@ async function converterAnimado(buffer, mimeType) {
             return outputBuffer;
         }
 
+        // Fallback: estático
         console.warn('⚠️ Criando sticker estático como fallback...');
         return await extrairPrimeiroFrame(buffer, mimeType);
 
     } catch (err) {
         console.error('❌ Erro na conversão animada:', err.message);
+        if (err.stderr) console.error('stderr:', err.stderr);
         try {
             if (fs.existsSync(inputPath)) fs.unlinkSync(inputPath);
             if (fs.existsSync(outputPath)) fs.unlinkSync(outputPath);
@@ -274,11 +273,21 @@ async function converterParaSticker(buffer, mimeType) {
     }
 }
 
-// ========== PROCESSAMENTO DE MENSAGENS ==========
+// ========== PROCESSAMENTO DE MENSAGENS (COM LOGS DETALHADOS) ==========
 const emProcessamento = new Set();
 
 client.on('message_create', async (msg) => {
-    if (msg.fromMe || !msg.hasMedia) return;
+    // Log BRUTO de toda mensagem recebida
+    console.log(`📨 Mensagem recebida de ${msg.from}: tipo=${msg.type}, temMidia=${msg.hasMedia}, body="${msg.body?.substring(0, 50)}"`);
+
+    if (msg.fromMe) {
+        console.log(`↩️ Ignorando mensagem do próprio bot`);
+        return;
+    }
+    if (!msg.hasMedia) {
+        console.log(`⏭️ Sem mídia, ignorando`);
+        return;
+    }
 
     const msgId = msg.id._serialized;
     if (emProcessamento.has(msgId)) return;
@@ -286,18 +295,21 @@ client.on('message_create', async (msg) => {
     setTimeout(() => emProcessamento.delete(msgId), 45000);
 
     const chatId = msg.from;
-    console.log(`\n🔔 Nova mídia de: ${chatId}`);
+    console.log(`\n🔔 PROCESSANDO MÍDIA de: ${chatId}`);
 
     try {
+        console.log('📥 Baixando mídia...');
         const media = await msg.downloadMedia();
         if (!media?.data) throw new Error('Falha ao baixar mídia');
+        console.log(`📦 Baixado: tipo=${media.mimetype}, tamanho=${media.data.length} bytes`);
+
         const buffer = Buffer.from(media.data, 'base64');
         let mimeType = media.mimetype || 'image/jpeg';
 
         // Detecta GIFs que chegam como video/mp4
         if (media.filename && media.filename.toLowerCase().endsWith('.gif')) {
             mimeType = 'image/gif';
-            console.log('🔧 Detectado GIF pela extensão');
+            console.log('🔧 Detectado GIF pela extensão, tratando como animado');
         }
 
         if (!mimeType.startsWith('image/') && !mimeType.startsWith('video/')) {
@@ -321,9 +333,14 @@ client.on('message_create', async (msg) => {
         console.log(`✅ Figurinha enviada (autor: ${nomeAutor})`);
 
         // Tenta apagar a original (se bot for admin)
-        try { await msg.delete(true); } catch (_) {}
+        try {
+            await msg.delete(true);
+            console.log(`🗑️ Mensagem original apagada`);
+        } catch (_) {
+            console.log(`⚠️ Não foi possível apagar (pode precisar ser admin)`);
+        }
     } catch (err) {
-        console.error(`❌ Erro: ${err.message}`);
+        console.error(`❌ ERRO GRAVE: ${err.message}`);
         try {
             await client.sendMessage(chatId, `❌ Falha ao criar figurinha: ${err.message.slice(0, 100)}`);
         } catch (_) {}
