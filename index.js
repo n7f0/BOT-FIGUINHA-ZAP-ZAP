@@ -43,9 +43,26 @@ app.get('/', (req, res) => {
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`✅ Servidor HTTP na porta ${PORT}`));
 
-// ========== PERFIL EFÊMERO DO CHROMIUM ==========
-const profileDir = `/tmp/chrome-profile-${Date.now()}`;
+// ========== PERFIL EFÊMERO DO CHROMIUM - GARANTIR UNICIDADE ==========
+// Usamos timestamp + PID + random para evitar qualquer conflito de lock
+const uniqueId = `${Date.now()}-${process.pid}-${Math.random().toString(36).substring(2, 8)}`;
+const profileDir = `/tmp/chrome-profile-${uniqueId}`;
+
+// Limpa qualquer diretório antigo que possa ter lock (segurança)
+try {
+    if (fs.existsSync('/tmp/chrome-profile-*')) {
+        const oldProfiles = fs.readdirSync('/tmp').filter(f => f.startsWith('chrome-profile-'));
+        for (const old of oldProfiles) {
+            try {
+                fs.rmSync(path.join('/tmp', old), { recursive: true, force: true });
+                console.log(`🧹 Limpo perfil antigo: ${old}`);
+            } catch (e) {}
+        }
+    }
+} catch (_) {}
+
 fs.mkdirSync(profileDir, { recursive: true });
+console.log(`📁 Perfil Chromium único: ${profileDir}`);
 
 const puppeteerArgs = [
     '--no-sandbox',
@@ -59,26 +76,34 @@ const puppeteerArgs = [
     '--hide-scrollbars',
     `--user-data-dir=${profileDir}`,
     '--disable-session-crashed-bubble',
-    '--disable-features=LockProfileCookieDatabase'
+    '--disable-features=LockProfileCookieDatabase',
+    '--disable-background-timer-throttling',
+    '--disable-backgrounding-occluded-windows',
+    '--disable-renderer-backgrounding',
+    '--disable-breakpad',
+    '--disable-crash-reporter',
+    '--disable-logging',
+    '--log-level=3',          // reduz verbosidade
+    '--silent',
+    '--remote-debugging-port=0'  // evita conflitos de porta
 ];
 
-// Detecta Chromium no Railway (via nixpacks ou variável de ambiente)
+// Detecta Chromium no Railway
 let executablePath = undefined;
 const possiblePaths = [
-    process.env.PUPPETEER_EXECUTABLE_PATH,  // variável manual
+    process.env.PUPPETEER_EXECUTABLE_PATH,
     '/usr/bin/chromium',
     '/usr/bin/chromium-browser',
-    'chromium'  // se estiver no PATH
+    'chromium'
 ].filter(Boolean);
 
 for (const p of possiblePaths) {
     if (p === 'chromium') {
-        // Verifica se está no PATH tentando executar `which chromium`
         try {
-            const { stdout } = require('child_process').execSync('which chromium', { encoding: 'utf8', stdio: 'pipe' });
-            if (stdout.trim()) {
-                executablePath = stdout.trim();
-                console.log(`✅ Chromium encontrado no PATH: ${executablePath}`);
+            const which = require('child_process').execSync('which chromium', { encoding: 'utf8', stdio: 'pipe' });
+            if (which.trim()) {
+                executablePath = which.trim();
+                console.log(`✅ Chromium no PATH: ${executablePath}`);
                 break;
             }
         } catch (_) {}
@@ -90,11 +115,14 @@ for (const p of possiblePaths) {
 }
 
 if (!executablePath) {
-    console.warn('⚠️ Chromium não encontrado. O Puppeteer tentará baixar um (pode falhar no Railway).');
+    console.warn('⚠️ Chromium não encontrado. O Puppeteer tentará baixar (pode falhar).');
 }
 
+// ========== CLIENTE WHATSAPP ==========
 const client = new Client({
-    authStrategy: new LocalAuth(),
+    authStrategy: new LocalAuth({
+        dataPath: '/app/.wwebjs_auth'  // caminho fixo para sessão, mas sem conflito com Chromium
+    }),
     puppeteer: {
         headless: true,
         args: puppeteerArgs,
@@ -111,7 +139,6 @@ async function verificarFFmpeg() {
         return true;
     } catch (err) {
         console.error('❌ FFmpeg não encontrado! Stickers animados não funcionarão.');
-        console.error('   Adicione "ffmpeg" ao nixPkgs ou variável RAILPACK_PACKAGES.');
         return false;
     }
 }
@@ -119,7 +146,7 @@ async function verificarFFmpeg() {
 // ========== QR CODE ==========
 client.on('qr', qr => {
     ultimoQRCode = qr;
-    console.log('\n📱 QR Code gerado! Acesse a URL pública da Railway.\n');
+    console.log('\n📱 QR Code gerado! Escaneie no WhatsApp.\n');
     qrcode.generate(qr, { small: true });
 });
 
@@ -136,7 +163,7 @@ client.on('ready', async () => {
     console.log('');
 });
 
-// ========== FUNÇÕES DE CONVERSÃO ==========
+// ========== FUNÇÕES DE CONVERSÃO (idênticas à versão anterior, mas vou manter) ==========
 async function converterEstatico(buffer) {
     try {
         const webp = await sharp(buffer)
@@ -267,7 +294,6 @@ client.on('message_create', async (msg) => {
         const buffer = Buffer.from(media.data, 'base64');
         let mimeType = media.mimetype || 'image/jpeg';
 
-        // Detecta GIFs que vêm como video/mp4
         if (media.filename && media.filename.toLowerCase().endsWith('.gif')) {
             mimeType = 'image/gif';
             console.log('🔧 Detectado GIF pela extensão');
@@ -322,13 +348,16 @@ client.on('auth_failure', (msg) => {
 });
 client.on('error', (err) => console.error('❌ Erro geral:', err));
 
+// ========== LIMPEZA NA SAÍDA ==========
 process.on('SIGINT', limpar);
 process.on('SIGTERM', limpar);
 function limpar() {
+    console.log('🧹 Limpando perfis temporários...');
     try { fs.rmSync(profileDir, { recursive: true, force: true }); } catch (_) {}
     try { fs.rmSync(PASTA_TEMP, { recursive: true, force: true }); } catch (_) {}
     process.exit(0);
 }
 
+// ========== INICIAR ==========
 client.initialize();
 console.log('🚀 FigurinhaBot iniciando... (512x512 com corte central)');
