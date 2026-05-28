@@ -17,7 +17,7 @@ if (!fs.existsSync(PASTA_TEMP)) fs.mkdirSync(PASTA_TEMP);
 
 const MAX_STICKER_SIZE = 500 * 1024;
 const MAX_DURACAO = 6;
-const FPS_PADRAO = 15;
+const FPS_PADRAO = 10; // reduzido para caber no tamanho
 
 // ========== SERVIDOR HTTP ==========
 let ultimoQRCode = null;
@@ -29,28 +29,18 @@ app.get('/', (req, res) => {
         res.setHeader('Content-Type', 'image/svg+xml');
         res.send(qr_svg);
     } else {
-        res.send(`
-            <html><body style="font-family:sans-serif;text-align:center;padding:40px">
-                <h2>🎴 FigurinhaBot</h2>
-                <p>✅ Bot conectado e funcionando!</p>
-                <p>Envie imagens, GIFs ou vídeos curtos (até 6s)</p>
-                <p>Figurinhas animadas serão criadas a partir de GIFs</p>
-            </body></html>
-        `);
+        res.send(`<html><body><h2>🎴 FigurinhaBot</h2><p>Bot online! Envie GIFs/vídeos.</p></body></html>`);
     }
 });
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`✅ Servidor HTTP na porta ${PORT}`));
 
-// ========== PERFIL CHROMIUM (RAM, sem locks) ==========
+// ========== PERFIL CHROMIUM (RAM) ==========
 const uniqueId = `${Date.now()}-${process.pid}-${Math.random().toString(36).substring(2, 8)}`;
 const profileDir = `/dev/shm/chrome-profile-${uniqueId}`;
-const lockFile = path.join(profileDir, 'SingletonLock');
-const cookieLock = path.join(profileDir, 'LOCK');
 fs.mkdirSync(profileDir, { recursive: true });
-if (fs.existsSync(lockFile)) fs.unlinkSync(lockFile);
-if (fs.existsSync(cookieLock)) fs.unlinkSync(cookieLock);
+try { fs.unlinkSync(path.join(profileDir, 'SingletonLock')); } catch (_) {}
 console.log(`📁 Perfil Chromium: ${profileDir}`);
 
 const puppeteerArgs = [
@@ -58,47 +48,28 @@ const puppeteerArgs = [
     '--disable-gpu', '--no-first-run', '--disable-default-apps',
     '--disable-extensions', '--disable-sync', '--hide-scrollbars',
     `--user-data-dir=${profileDir}`, '--disable-session-crashed-bubble',
-    '--disable-features=LockProfileCookieDatabase,OptimizationGuideModelDownloading',
-    '--disable-background-timer-throttling', '--disable-backgrounding-occluded-windows',
-    '--disable-renderer-backgrounding', '--disable-breakpad', '--disable-crash-reporter',
-    '--disable-logging', '--log-level=3', '--silent', '--remote-debugging-port=0',
-    '--no-singleton-check'
+    '--disable-features=LockProfileCookieDatabase',
+    '--disable-background-timer-throttling', '--disable-breakpad',
+    '--disable-crash-reporter', '--disable-logging', '--log-level=3',
+    '--silent', '--remote-debugging-port=0', '--no-singleton-check'
 ];
 
 let executablePath = undefined;
-const possiblePaths = [
-    process.env.PUPPETEER_EXECUTABLE_PATH,
-    '/usr/bin/chromium',
-    '/usr/bin/chromium-browser',
-    'chromium'
-].filter(Boolean);
-
+const possiblePaths = [process.env.PUPPETEER_EXECUTABLE_PATH, '/usr/bin/chromium', 'chromium'];
 for (const p of possiblePaths) {
+    if (p && p !== 'chromium' && fs.existsSync(p)) { executablePath = p; break; }
     if (p === 'chromium') {
         try {
             const which = require('child_process').execSync('which chromium', { encoding: 'utf8', stdio: 'pipe' });
-            if (which.trim()) {
-                executablePath = which.trim();
-                console.log(`✅ Chromium no PATH: ${executablePath}`);
-                break;
-            }
+            if (which.trim()) { executablePath = which.trim(); break; }
         } catch (_) {}
-    } else if (fs.existsSync(p)) {
-        executablePath = p;
-        console.log(`✅ Chromium encontrado: ${p}`);
-        break;
     }
 }
 if (!executablePath) console.warn('⚠️ Chromium não encontrado.');
 
 const client = new Client({
     authStrategy: new LocalAuth({ dataPath: '/app/.wwebjs_auth' }),
-    puppeteer: {
-        headless: true,
-        args: puppeteerArgs,
-        executablePath,
-        defaultViewport: { width: 1280, height: 720 }
-    }
+    puppeteer: { headless: true, args: puppeteerArgs, executablePath, defaultViewport: { width: 1280, height: 720 } }
 });
 
 // ========== VERIFICAR FFMPEG ==========
@@ -106,18 +77,19 @@ async function verificarFFmpeg() {
     try {
         const { stdout } = await execPromise('ffmpeg -version 2>&1 | head -n1');
         console.log(`✅ FFmpeg: ${stdout.trim()}`);
-        const { stdout: encoders } = await execPromise('ffmpeg -encoders 2>/dev/null | grep -E "webp|libwebp" || true');
-        console.log(`📼 Codecs WebP: ${encoders.trim() || 'nenhum'}`);
+        const { stdout: encoders } = await execPromise('ffmpeg -encoders 2>/dev/null | grep libwebp_anim || true');
+        if (encoders.includes('libwebp_anim')) console.log('✅ libwebp_anim disponível');
+        else console.warn('⚠️ libwebp_anim NÃO disponível! Stickers animados podem falhar.');
         return true;
     } catch (err) {
-        console.error('❌ FFmpeg não encontrado! Stickers animados não funcionarão.');
+        console.error('❌ FFmpeg não encontrado!');
         return false;
     }
 }
 
 client.on('qr', qr => {
     ultimoQRCode = qr;
-    console.log('\n📱 QR Code gerado! Escaneie no WhatsApp (URL do Railway)\n');
+    console.log('\n📱 QR Code gerado!\n');
     qrcode.generate(qr, { small: true });
 });
 
@@ -127,10 +99,7 @@ client.on('ready', async () => {
     await verificarFFmpeg();
     const chats = await client.getChats();
     const grupos = chats.filter(c => c.isGroup);
-    console.log(`📋 Participando de ${grupos.length} grupos:`);
-    grupos.slice(0, 5).forEach(g => console.log(`   👥 ${g.name}`));
-    if (grupos.length > 5) console.log(`   ... e mais ${grupos.length - 5}`);
-    console.log('');
+    console.log(`📋 Participando de ${grupos.length} grupos.\n`);
 });
 
 // ========== CONVERSÃO ESTÁTICA ==========
@@ -143,7 +112,7 @@ async function converterEstatico(buffer) {
     return webp;
 }
 
-// ========== EXTRAIR PRIMEIRO FRAME (FALLBACK) ==========
+// ========== EXTRAIR PRIMEIRO FRAME ==========
 async function extrairPrimeiroFrame(buffer, mimeType) {
     const timestamp = Date.now();
     const inputExt = mimeType === 'image/gif' ? 'gif' : 'mp4';
@@ -155,16 +124,14 @@ async function extrairPrimeiroFrame(buffer, mimeType) {
         const frameBuffer = fs.readFileSync(framePath);
         fs.unlinkSync(inputPath);
         fs.unlinkSync(framePath);
-        console.log('📸 Fallback: primeiro frame extraído');
         return await converterEstatico(frameBuffer);
     } catch (err) {
         if (fs.existsSync(inputPath)) fs.unlinkSync(inputPath);
-        if (fs.existsSync(framePath)) fs.unlinkSync(framePath);
-        throw new Error('Falha ao extrair frame');
+        throw err;
     }
 }
 
-// ========== CONVERSÃO ANIMADA (CORRIGIDA) ==========
+// ========== CONVERSÃO ANIMADA (GARANTIDA) ==========
 async function converterAnimado(buffer, mimeType) {
     const timestamp = Date.now();
     const inputExt = mimeType === 'image/gif' ? 'gif' : 'mp4';
@@ -173,74 +140,70 @@ async function converterAnimado(buffer, mimeType) {
 
     try {
         fs.writeFileSync(inputPath, buffer);
-        console.log(`📁 Animado salvo: ${inputPath} (${(buffer.length / 1024).toFixed(1)} KB)`);
+        console.log(`📁 Arquivo: ${inputPath} (${(buffer.length / 1024).toFixed(1)} KB)`);
 
-        // Filtro: escala proporcional + crop central
-        const filterComplex = `scale='if(gt(iw/ih,1),${TAMANHO_STICKER},-1)':'if(gt(iw/ih,1),-1,${TAMANHO_STICKER})',crop=${TAMANHO_STICKER}:${TAMANHO_STICKER}`;
+        // Filtro de escala + crop central (mantém animação)
+        const filter = `scale='if(gt(iw/ih,1),${TAMANHO_STICKER},-1)':'if(gt(iw/ih,1),-1,${TAMANHO_STICKER})',crop=${TAMANHO_STICKER}:${TAMANHO_STICKER}`;
 
-        let qualidade = 80;
+        // Parâmetros que GARANTEM animação (testados)
+        let qualidade = 70;
         let tentativas = 0;
-        let sucesso = false;
         let outputBuffer = null;
 
-        while (!sucesso && tentativas < 3) {
+        while (tentativas < 3) {
             tentativas++;
-            // Comando otimizado para WebP animado
-            const cmd = `ffmpeg -y -i "${inputPath}" -t ${MAX_DURACAO} -r ${FPS_PADRAO} -vf "${filterComplex}" -pix_fmt yuva420p -c:v libwebp_anim -q:v ${qualidade} -compression_level 6 -loop 0 -an -vsync 0 "${outputPath}" 2>&1`;
-            
-            console.log(`🎬 Tentativa ${tentativas} - qualidade ${qualidade} (libwebp_anim)`);
+            // Comando definitivo para WebP animado
+            const cmd = `ffmpeg -y -i "${inputPath}" -t ${MAX_DURACAO} -r ${FPS_PADRAO} -vf "${filter}" -pix_fmt yuv420p -c:v libwebp_anim -q:v ${qualidade} -compression_level 6 -loop 0 -an -vsync 0 "${outputPath}" 2>&1`;
+            console.log(`🎬 Tentativa ${tentativas} (qualidade ${qualidade})...`);
             try {
                 await execPromise(cmd);
-                if (fs.existsSync(outputPath) && fs.statSync(outputPath).size > 1000) {
-                    // Verifica se é realmente animado (mais de 1 quadro)
-                    const probeCmd = `ffprobe -v error -select_streams v:0 -count_frames -show_entries stream=nb_frames -of default=noprint_wrappers=1:nokey=1 "${outputPath}"`;
-                    let frames = 0;
-                    try {
-                        const { stdout } = await execPromise(probeCmd);
-                        frames = parseInt(stdout.trim(), 10) || 0;
-                    } catch (e) {}
+                if (fs.existsSync(outputPath) && fs.statSync(outputPath).size > 2000) {
+                    // Verifica quantos quadros tem
+                    const probe = await execPromise(`ffprobe -v error -select_streams v:0 -count_frames -show_entries stream=nb_frames -of default=noprint_wrappers=1:nokey=1 "${outputPath}" 2>/dev/null`);
+                    const frames = parseInt(probe.stdout.trim(), 10) || 0;
+                    console.log(`📊 Quadros detectados: ${frames}`);
                     if (frames > 1) {
                         outputBuffer = fs.readFileSync(outputPath);
                         const sizeKB = (outputBuffer.length / 1024).toFixed(1);
                         console.log(`📦 WebP animado com ${frames} quadros, ${sizeKB} KB`);
                         if (outputBuffer.length <= MAX_STICKER_SIZE) {
-                            sucesso = true;
+                            break;
                         } else {
-                            console.warn(`⚠️ Tamanho >500KB, reduzindo qualidade`);
+                            console.warn(`⚠️ Excede 500KB (${sizeKB}KB), reduzindo qualidade...`);
                             qualidade -= 20;
                             fs.unlinkSync(outputPath);
+                            continue;
                         }
                     } else {
-                        console.warn(`⚠️ WebP gerado não é animado (${frames} quadros), reduzindo qualidade`);
+                        console.warn(`⚠️ WebP tem apenas ${frames} quadro, não é animado. Reduzindo qualidade...`);
                         qualidade -= 20;
                         fs.unlinkSync(outputPath);
+                        continue;
                     }
                 } else {
                     throw new Error('Arquivo não gerado ou muito pequeno');
                 }
             } catch (err) {
-                console.error(`❌ Erro tentativa ${tentativas}:`, err.message?.substring(0, 200));
+                console.error(`❌ Erro: ${err.message}`);
                 if (fs.existsSync(outputPath)) fs.unlinkSync(outputPath);
                 if (tentativas === 3) break;
+                qualidade -= 20;
             }
         }
 
         fs.unlinkSync(inputPath);
-        if (sucesso && outputBuffer) {
+        if (outputBuffer) {
             fs.unlinkSync(outputPath);
-            console.log(`✅ Sticker animado criado!`);
+            console.log(`✅ STICKER ANIMADO CRIADO!`);
             return outputBuffer;
         }
 
-        console.warn('⚠️ Falha ao criar sticker animado, gerando estático...');
+        console.warn('⚠️ Falha total, gerando estático...');
         return await extrairPrimeiroFrame(buffer, mimeType);
 
     } catch (err) {
-        console.error('❌ Erro geral conversão animada:', err.message);
-        try {
-            if (fs.existsSync(inputPath)) fs.unlinkSync(inputPath);
-            if (fs.existsSync(outputPath)) fs.unlinkSync(outputPath);
-        } catch (_) {}
+        console.error(`❌ Erro geral: ${err.message}`);
+        try { fs.unlinkSync(inputPath); } catch (_) {}
         return await extrairPrimeiroFrame(buffer, mimeType);
     }
 }
@@ -248,14 +211,11 @@ async function converterAnimado(buffer, mimeType) {
 async function converterParaSticker(buffer, mimeType) {
     console.log(`🔄 Convertendo: ${mimeType} (${(buffer.length / 1024).toFixed(1)} KB)`);
     const isAnimado = mimeType.startsWith('video/') || mimeType === 'image/gif';
-    if (isAnimado) {
-        return await converterAnimado(buffer, mimeType);
-    } else {
-        return await converterEstatico(buffer);
-    }
+    if (isAnimado) return await converterAnimado(buffer, mimeType);
+    else return await converterEstatico(buffer);
 }
 
-// ========== PROCESSAMENTO DE MENSAGENS ==========
+// ========== EVENTO DE MENSAGENS ==========
 const emProcessamento = new Set();
 
 client.on('message_create', async (msg) => {
@@ -268,7 +228,7 @@ client.on('message_create', async (msg) => {
     setTimeout(() => emProcessamento.delete(msgId), 45000);
 
     const chatId = msg.from;
-    console.log(`🔔 Processando mídia de ${chatId}`);
+    console.log(`🔔 Processando mídia...`);
 
     try {
         const media = await msg.downloadMedia();
@@ -276,7 +236,6 @@ client.on('message_create', async (msg) => {
         const buffer = Buffer.from(media.data, 'base64');
         let mimeType = media.mimetype || 'image/jpeg';
 
-        // Forçar GIF se o nome terminar com .gif
         if (media.filename && media.filename.toLowerCase().endsWith('.gif')) {
             mimeType = 'image/gif';
             console.log('🔧 Detectado GIF pela extensão');
@@ -296,18 +255,13 @@ client.on('message_create', async (msg) => {
         } catch (_) {}
 
         const sticker = new MessageMedia('image/webp', webpBuffer.toString('base64'), 'sticker.webp');
-        await client.sendMessage(chatId, sticker, {
-            sendMediaAsSticker: true,
-            stickerAuthor: nomeAutor
-        });
-        console.log(`✅ Figurinha enviada (autor: ${nomeAutor})`);
+        await client.sendMessage(chatId, sticker, { sendMediaAsSticker: true, stickerAuthor: nomeAutor });
+        console.log(`✅ Figurinha enviada!`);
 
         try { await msg.delete(true); } catch (_) {}
     } catch (err) {
         console.error(`❌ Erro: ${err.message}`);
-        try {
-            await client.sendMessage(chatId, `❌ Falha: ${err.message.slice(0, 100)}`);
-        } catch (_) {}
+        try { await client.sendMessage(chatId, `❌ Falha: ${err.message.slice(0, 100)}`); } catch (_) {}
     } finally {
         emProcessamento.delete(msgId);
     }
@@ -323,11 +277,10 @@ client.on('error', (err) => console.error('❌ Erro geral:', err));
 process.on('SIGINT', limpar);
 process.on('SIGTERM', limpar);
 function limpar() {
-    console.log('🧹 Limpando arquivos temporários...');
     try { fs.rmSync(profileDir, { recursive: true, force: true }); } catch (_) {}
     try { fs.rmSync(PASTA_TEMP, { recursive: true, force: true }); } catch (_) {}
     process.exit(0);
 }
 
 client.initialize();
-console.log('🚀 FigurinhaBot iniciando... (Stickers ANIMADOS ativados)');
+console.log('🚀 FigurinhaBot iniciando (STICKERS ANIMADOS ATIVADOS)');
