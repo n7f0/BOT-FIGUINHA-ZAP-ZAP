@@ -62,23 +62,23 @@ const puppeteerArgs = [
     '--disable-features=LockProfileCookieDatabase'
 ];
 
-// Procura pelo Chromium instalado via nixpacks ou variável de ambiente
+// Detecta Chromium no Railway (via nixpacks ou variável de ambiente)
 let executablePath = undefined;
-const chromiumPaths = [
+const possiblePaths = [
+    process.env.PUPPETEER_EXECUTABLE_PATH,  // variável manual
     '/usr/bin/chromium',
     '/usr/bin/chromium-browser',
-    '/nix/store/*/chromium/bin/chromium',
-    process.env.PUPPETEER_EXECUTABLE_PATH
+    'chromium'  // se estiver no PATH
 ].filter(Boolean);
 
-for (const p of chromiumPaths) {
-    // Expande wildcard manualmente (para /nix/store/*/chromium...)
-    if (p.includes('*')) {
+for (const p of possiblePaths) {
+    if (p === 'chromium') {
+        // Verifica se está no PATH tentando executar `which chromium`
         try {
-            const { stdout } = await execPromise(`ls ${p} 2>/dev/null | head -1`);
+            const { stdout } = require('child_process').execSync('which chromium', { encoding: 'utf8', stdio: 'pipe' });
             if (stdout.trim()) {
                 executablePath = stdout.trim();
-                console.log(`✅ Chromium encontrado: ${executablePath}`);
+                console.log(`✅ Chromium encontrado no PATH: ${executablePath}`);
                 break;
             }
         } catch (_) {}
@@ -90,7 +90,7 @@ for (const p of chromiumPaths) {
 }
 
 if (!executablePath) {
-    console.warn('⚠️ Chromium não encontrado. Tentando usar o que o Puppeteer baixar...');
+    console.warn('⚠️ Chromium não encontrado. O Puppeteer tentará baixar um (pode falhar no Railway).');
 }
 
 const client = new Client({
@@ -183,7 +183,6 @@ async function converterAnimado(buffer, mimeType) {
         fs.writeFileSync(inputPath, buffer);
         console.log(`📁 Animado salvo: ${inputPath} (${(buffer.length / 1024).toFixed(1)} KB)`);
 
-        // Filtro correto: redimensiona mantendo proporção e corta o centro
         const filterComplex = `scale=iw*min(${TAMANHO_STICKER}/iw\\,${TAMANHO_STICKER}/ih):ih*min(${TAMANHO_STICKER}/iw\\,${TAMANHO_STICKER}/ih),crop=${TAMANHO_STICKER}:${TAMANHO_STICKER}`;
 
         let qualidade = 80;
@@ -268,12 +267,11 @@ client.on('message_create', async (msg) => {
         const buffer = Buffer.from(media.data, 'base64');
         let mimeType = media.mimetype || 'image/jpeg';
 
-        // CORREÇÃO CRÍTICA: detectar GIFs que vêm como video/mp4
+        // Detecta GIFs que vêm como video/mp4
         if (media.filename && media.filename.toLowerCase().endsWith('.gif')) {
             mimeType = 'image/gif';
             console.log('🔧 Detectado GIF pela extensão');
         }
-        // Se o WhatsApp marcou como video/mp4 e não é um GIF, ainda será tratado como animado (vídeo)
 
         const suportado = mimeType.startsWith('image/') || mimeType.startsWith('video/');
         if (!suportado) {
@@ -296,7 +294,6 @@ client.on('message_create', async (msg) => {
         });
         console.log(`✅ Figurinha enviada (autor: ${nomeAutor})`);
 
-        // Tenta apagar a original (opcional)
         try {
             await msg.delete(true);
             console.log(`🗑️ Original apagada`);
