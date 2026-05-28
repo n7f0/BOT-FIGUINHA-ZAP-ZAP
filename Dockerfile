@@ -1,16 +1,21 @@
 FROM node:18-slim
 
-RUN apt-get update && apt-get install -y \
+# Instala as dependências do sistema: ffmpeg e chromium (necessário para o whatsapp-web.js)
+RUN apt-get update && \
+    apt-get install -y \
     ffmpeg \
     chromium \
-    --no-install-recommends \
-    && rm -rf /var/lib/apt/lists/*
+    && apt-get clean
 
-ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
-
+# Define o diretório de trabalho
 WORKDIR /app
+
+# Copia os arquivos do projeto e instala as dependências Node.js
 COPY package*.json ./
 RUN npm install
+
+# Copia o resto do código
 COPY . .
-EXPOSE 3000
-CMD ["node", "index.js"]
+
+# Comando para iniciar o bot
+CMD ["node", "bot.js"]
